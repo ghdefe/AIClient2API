@@ -28,6 +28,14 @@
     letter-spacing: -0.025em;
 }
 
+.header h1 .header-logo {
+    height: 1.5rem;
+    width: 1.5rem;
+    margin-right: 0.5rem;
+    border-radius: 50%;
+    object-fit: contain;
+}
+
 .header h1 i {
     margin-right: 0.5rem;
 }
@@ -36,6 +44,14 @@
     display: flex;
     gap: 1rem;
     align-items: center;
+}
+
+.header-controls > a,
+.header-controls > button,
+.header-controls > .status-badge,
+.header-controls .language-btn {
+    box-sizing: border-box;
+    height: 40px;
 }
 
 .status-badge {
@@ -94,35 +110,93 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
-    padding: 0;
-    background: transparent;
-    color: var(--text-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 50%;
+    gap: 0.45rem;
+    min-height: 40px;
+    padding: 0.5rem 0.8rem;
+    background: #24292f;
+    color: #ffffff;
+    border: 1px solid #24292f;
+    border-radius: var(--radius-full);
     cursor: pointer;
-    font-size: 1.125rem;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    white-space: nowrap;
     transition: var(--transition);
     text-decoration: none;
     position: relative;
-    overflow: hidden;
+    transform-origin: center;
+    animation: github-star-nudge 3s ease-in-out 1s infinite;
+    will-change: transform;
 }
 
 .github-link:hover {
-    background: var(--bg-tertiary);
-    color: var(--primary-color);
-    border-color: var(--primary-color);
+    background: #1b1f23;
+    color: #ffffff;
+    border-color: #fbbf24;
     transform: translateY(-2px);
-    box-shadow: var(--shadow-md);
+    box-shadow: 0 4px 12px rgba(36, 41, 47, 0.25);
+    animation: none;
+}
+
+.github-link:focus-visible {
+    outline: 3px solid var(--primary-30);
+    outline-offset: 2px;
+    animation: none;
 }
 
 .github-link:active {
-    transform: translateY(0);
+    transform: translateY(0) scale(0.97);
+    animation: none;
+}
+
+/* 周期性轻抖提醒，短暂吸引注意力而不持续干扰操作 */
+@keyframes github-star-nudge {
+    0%, 14%, 100% {
+        transform: translateX(0) rotate(0) scale(1);
+        box-shadow: none;
+    }
+    2% {
+        transform: translateX(-2px) rotate(-2deg) scale(1.02);
+    }
+    4% {
+        transform: translateX(3px) rotate(2.5deg) scale(1.04);
+        box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.14), 0 5px 14px rgba(36, 41, 47, 0.24);
+    }
+    6% {
+        transform: translateX(-3px) rotate(-2.5deg) scale(1.04);
+    }
+    8% {
+        transform: translateX(2px) rotate(1.5deg) scale(1.03);
+        box-shadow: 0 0 0 5px rgba(251, 191, 36, 0.08), 0 5px 14px rgba(36, 41, 47, 0.2);
+    }
+    10% {
+        transform: translateX(-1px) rotate(-1deg) scale(1.01);
+    }
+    12% {
+        transform: translateX(0) rotate(0) scale(1);
+        box-shadow: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .github-link {
+        animation: none;
+        will-change: auto;
+    }
 }
 
 .github-link i {
-    transition: transform 0.3s ease;
+    font-size: 1rem;
+    transition: transform 0.2s ease;
+}
+
+.github-link .github-star-icon {
+    color: #fbbf24;
+    font-size: 0.75rem;
+}
+
+.github-link:hover .github-star-icon {
+    transform: rotate(12deg) scale(1.15);
 }
 
 /* KIRO 购买链接 */
@@ -152,6 +226,36 @@
 }
 
 .kiro-buy-link i {
+    font-size: 0.875rem;
+}
+
+/* KIRO 视频教程链接 */
+.kiro-video-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: linear-gradient(135deg, #fb7299 0%, #fc4080 100%);
+    color: var(--white);
+    text-decoration: none;
+    border-radius: 9999px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    transition: var(--transition);
+    box-shadow: 0 2px 8px rgba(251, 114, 153, 0.3);
+}
+
+.kiro-video-link:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(251, 114, 153, 0.4);
+    background: linear-gradient(135deg, #fc4080 0%, #fb7299 100%);
+}
+
+.kiro-video-link:active {
+    transform: translateY(0);
+}
+
+.kiro-video-link i {
     font-size: 0.875rem;
 }
 

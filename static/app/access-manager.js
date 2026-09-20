@@ -7,16 +7,20 @@ let latestSnippetFormat = 'markdown';
 
 const recommendedModelMap = {
     'gemini-cli-oauth': 'gemini-3-flash-preview',
-    'gemini-antigravity': 'gemini-3-flash-preview',
-    'claude-custom': 'claude-sonnet-4-6',
-    'claude-kiro-oauth': 'claude-sonnet-4-6',
-    'openai-custom': 'gpt-4o',
+    'gemini-antigravity': 'gemini-3-flash',
+    'claude-custom': 'claude-sonnet-4-5',
+    'claude-kiro-oauth': 'claude-sonnet-4-5',
+    'openai-custom': 'gpt-5.5',
+    'atlascloud': 'gpt-5.5',
+    'qiniu': 'gpt-5.5',
+    'fenno': 'gpt-5.5',
     'openai-qwen-oauth': 'qwen3-coder-plus',
     'openai-iflow': 'qwen3-max',
     'openai-codex-oauth': 'gpt-5',
-    'grok-web': 'grok-4.1-mini',
-    'openaiResponses-custom': 'gpt-4o',
-    'forward-api': 'gpt-4o'
+    'openaiResponses-custom': 'gpt-5.5',
+    'grok-web': 'grok-4.3',
+    'grok-cli-oauth': 'grok-4.3',
+    'forward-api': 'gpt-5.5'
 };
 
 function getElement(id) {
@@ -107,7 +111,7 @@ function getRecommendedModel(providerId) {
         return recommendedModelMap[matchedBaseId];
     }
 
-    return 'gpt-4o';
+    return 'gpt-5.5';
 }
 
 function toPrettyJson(value) {
@@ -169,8 +173,9 @@ function renderProviderCards(providers, defaultProviders, configMap) {
         const name = config?.name || provider.id;
         const icon = config?.icon || 'fa-server';
         const route = resolveRouteInfo(provider.id, name);
-        const openaiPath = route.paths?.openai;
-        const claudePath = route.paths?.claude;
+        const openaiPath = `/${provider.id}/v1/chat/completions`;
+        const responsesPath = `/${provider.id}/v1/responses`;
+        const claudePath = `/${provider.id}/v1/messages`;
         const isDefault = defaultProviders.includes(provider.id);
         const emptyClass = provider.totalNodes === 0 ? 'empty' : '';
         const emptyBadge = provider.totalNodes === 0
@@ -226,9 +231,28 @@ function renderProviderCards(providers, defaultProviders, configMap) {
                             </button>
                             <button type="button" class="btn btn-outline btn-sm access-curl-btn" 
                                     data-i18n-title="access.actions.copyCurl"
-                                    title="复制 curl 示例"
+                                    title="${escapeHtml(t('access.actions.copyCurl'))}"
                                     data-provider="${provider.id}"
                                     data-protocol="openai">
+                                <i class="fas fa-terminal"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="access-endpoint-row">
+                        <strong>${escapeHtml(t('access.providers.responsesEndpoint'))}</strong>
+                        <code>${escapeHtml(getFullEndpoint(responsesPath))}</code>
+                        <div class="access-endpoint-actions">
+                            <button type="button" class="btn btn-secondary btn-sm access-copy-btn"
+                                    data-i18n-title="access.actions.copyEndpoint"
+                                    title="${escapeHtml(t('access.actions.copyEndpoint'))}"
+                                    data-copy="${escapeHtml(getFullEndpoint(responsesPath))}">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                            <button type="button" class="btn btn-outline btn-sm access-curl-btn"
+                                    data-i18n-title="access.actions.copyCurl"
+                                    title="${escapeHtml(t('access.actions.copyCurl'))}"
+                                    data-provider="${provider.id}"
+                                    data-protocol="responses">
                                 <i class="fas fa-terminal"></i>
                             </button>
                         </div>
@@ -245,7 +269,7 @@ function renderProviderCards(providers, defaultProviders, configMap) {
                             </button>
                             <button type="button" class="btn btn-outline btn-sm access-curl-btn" 
                                     data-i18n-title="access.actions.copyCurl"
-                                    title="复制 curl 示例"
+                                    title="${escapeHtml(t('access.actions.copyCurl'))}"
                                     data-provider="${provider.id}"
                                     data-protocol="claude">
                                 <i class="fas fa-terminal"></i>
@@ -465,6 +489,19 @@ function navigateToSection(sectionId) {
 }
 
 function renderAccessPage(data) {
+    // 按照 getProviderConfigs 的预设顺序对 providers 进行排序，以保持与系统其他地方（如提供商列表、模型测试）的展示顺序一致
+    if (data.providers && data.supportedProviders) {
+        const presetConfigs = getProviderConfigs(data.supportedProviders);
+        const presetOrder = presetConfigs.map(config => config.id);
+        data.providers.sort((a, b) => {
+            const indexA = presetOrder.indexOf(a.id);
+            const indexB = presetOrder.indexOf(b.id);
+            const valA = indexA === -1 ? 999 : indexA;
+            const valB = indexB === -1 ? 999 : indexB;
+            return valA - valB;
+        });
+    }
+
     const configMap = buildProviderConfigMap(data.supportedProviders || []);
     const visibleProviders = getVisibleProviders(data.providers || []);
 

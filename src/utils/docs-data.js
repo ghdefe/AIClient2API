@@ -40,7 +40,7 @@ export const HELP_DATA = {
         { path: "/api/help", desc: "获取启动帮助信息 (JSON/Text)" },
         { path: "/api/example", desc: "获取 API 资源指南 (JSON/Text)" }
     ],
-    docker: "docker run -d -p 3000:3000 -v \"$(pwd)/configs:/app/configs\" justlikemaki/aiclient-2-api"
+    docker: "docker run -d -p 3000:3000 -v \"$(pwd)/configs:/app/configs\" -v \"$(pwd)/plugins:/app/src/plugins-user\" justlikemaki/aiclient-2-api"
 };
 
 export const API_GUIDE_DATA = [
@@ -106,6 +106,7 @@ export const API_GUIDE_DATA = [
         { method: 'POST',   path: '/api/quick-link-provider',     desc: '自动将本地凭据关联到账号池' },
         { method: 'POST',   path: '/api/oauth/manual-callback',   desc: '手动提交 OAuth 授权回调数据' },
         { method: 'POST',   path: '/api/providers/{type}/generate-auth-url', desc: '生成 OAuth 授权引导链接' },
+        { method: 'POST',   path: '/api/codex/import-external-credentials', desc: '导入 CPA/sub2api Codex 凭据 (SSE 模式)' },
         { method: 'POST',   path: '/api/kiro/import-aws-credentials', desc: '导入 AWS SSO 凭据 (Kiro)' },
         { method: 'POST',   path: '/api/{type}/batch-import-tokens', desc: '批量导入 Refresh Tokens (SSE 模式)' }
     ]},

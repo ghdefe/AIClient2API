@@ -48,17 +48,21 @@ export class ProviderPoolManager {
     // 默认健康检查模型配置
     // 键名必须与 MODEL_PROVIDER 常量值一致
     static DEFAULT_HEALTH_CHECK_MODELS = {
-        'gemini-cli-oauth': 'gemini-2.5-flash',
-        'gemini-antigravity': 'gemini-2.5-flash',
-        'openai-custom': 'gpt-4o-mini',
-        'claude-custom': 'claude-3-7-sonnet-20250219',
-        'claude-kiro-oauth': 'claude-haiku-4-5',
-        'openai-qwen-oauth': 'qwen3-coder-flash',
-        'openai-iflow': 'qwen3-coder-plus',
-        'openai-codex-oauth': 'gpt-5-codex-mini',
-        'openaiResponses-custom': 'gpt-4o-mini',
-        'forward-api': 'gpt-4o-mini',
-        'grok-web': 'grok-4.1-mini',
+        'gemini-cli-oauth': 'gemini-3-flash-preview',
+        'gemini-antigravity': 'gemini-3-flash',
+        'claude-custom': 'claude-sonnet-4-5',
+        'claude-kiro-oauth': 'claude-sonnet-4-5',
+        'openai-custom': 'gpt-5.5',
+        'atlascloud': 'gpt-5.5',
+        'qiniu': 'gpt-5.5',
+        'fenno': 'gpt-5.5',
+        'openai-qwen-oauth': 'qwen3-coder-plus',
+        'openai-iflow': 'qwen3-max',
+        'openai-codex-oauth': 'gpt-5',
+        'openaiResponses-custom': 'gpt-5.5',
+        'grok-web': 'grok-4.3',
+        'grok-cli-oauth': 'grok-4.3',
+        'forward-api': 'gpt-5.5'
     };
 
     constructor(providerPools, options = {}) {
@@ -156,6 +160,8 @@ export class ProviderPoolManager {
                     configPath = config.IFLOW_OAUTH_CREDS_FILE_PATH;
                 } else if (providerType.startsWith('openai-codex')) {
                     configPath = config.CODEX_OAUTH_CREDS_FILE_PATH;
+                } else if (providerType.startsWith('grok-cli')) {
+                    configPath = config.GROK_CLI_OAUTH_CREDS_FILE_PATH;
                 }
                 
                 // logger.info(`Checking node ${this._getDisplayName(config)} (${providerType}) expiry date... configPath: ${configPath}`);
@@ -346,13 +352,13 @@ export class ProviderPoolManager {
         if (!this.refreshQueues[providerType]) {
             this.refreshQueues[providerType] = {
                 activeCount: 0,
-                waitingTasks: []
+                waitingTasks: [],
+                ownsGlobalSlot: false,
+                waitingForGlobalSlot: false
             };
         }
 
         const queue = this.refreshQueues[providerType];
-        // 记录此任务是否持有一个全局槽位（情况1追加的任务不持有）
-        let ownsGlobalSlot = false;
 
         const runTask = async () => {
             try {
@@ -377,6 +383,9 @@ export class ProviderPoolManager {
                         this._log('error', `Failed to execute next task for ${providerType}: ${err.message}`);
                     });
                 } else if (currentQueue.activeCount === 0) {
+                    const ownsGlobalSlot = currentQueue.ownsGlobalSlot;
+                    currentQueue.ownsGlobalSlot = false;
+
                     // 清理空队列：无论是否持有全局槽位，都应删除已无任务的队列对象
                     if (currentQueue.waitingTasks.length === 0 &&
                         this.refreshQueues[providerType] === currentQueue) {
@@ -385,7 +394,7 @@ export class ProviderPoolManager {
 
                     // 只有持有全局槽位的任务才能递减计数器
                     if (ownsGlobalSlot) {
-                        this.activeProviderRefreshes--;
+                        this.activeProviderRefreshes = Math.max(0, this.activeProviderRefreshes - 1);
                     }
 
                     // 3. 尝试启动下一个等待中的提供商队列
@@ -400,40 +409,51 @@ export class ProviderPoolManager {
         };
 
         const tryStartProviderQueue = () => {
-            if (queue.activeCount < this.refreshConcurrency.perProvider) {
-                queue.activeCount++;
+            const currentQueue = this.refreshQueues[providerType];
+            if (!currentQueue) return;
+
+            if (currentQueue.activeCount < this.refreshConcurrency.perProvider) {
+                currentQueue.activeCount++;
                 runTask().catch(err => {
                     this._log('error', `Critical error in runTask for ${providerType}: ${err.message}`);
                 });
             } else {
-                queue.waitingTasks.push(runTask);
+                currentQueue.waitingTasks.push(runTask);
             }
         };
 
         // 检查全局并发限制（按提供商分组）
         // 情况1: 该提供商已经在运行，直接加入其队列（不占用新的全局槽位）
-        const isExistingQueue = this.refreshQueues[providerType].activeCount > 0 || this.refreshQueues[providerType].waitingTasks.length > 0;
-        if (isExistingQueue) {
+        if (queue.ownsGlobalSlot) {
             tryStartProviderQueue();
         }
-        // 情况2: 该提供商未运行，需要检查全局槽位，此路径持有全局槽位
+        // 情况2: 该提供商正在等待全局槽位，后续任务只加入队列
+        else if (queue.waitingForGlobalSlot) {
+            queue.waitingTasks.push(runTask);
+        }
+        // 情况3: 该提供商未运行，需要检查全局槽位，此路径持有全局槽位
         else if (this.activeProviderRefreshes < this.refreshConcurrency.global) {
-            ownsGlobalSlot = true;
+            queue.ownsGlobalSlot = true;
             this.activeProviderRefreshes++;
             tryStartProviderQueue();
         }
-        // 情况3: 全局槽位已满，进入等待队列，由等待回调负责标记持槽
+        // 情况4: 全局槽位已满，进入等待队列，由等待回调负责标记持槽
         else {
+            queue.waitingForGlobalSlot = true;
             this.globalRefreshWaiters.push(() => {
                 // 重新获取最新的队列引用
                 if (!this.refreshQueues[providerType]) {
                     this.refreshQueues[providerType] = {
                         activeCount: 0,
-                        waitingTasks: []
+                        waitingTasks: [],
+                        ownsGlobalSlot: false,
+                        waitingForGlobalSlot: false
                     };
                 }
                 // 从等待队列启动时持有全局槽位
-                ownsGlobalSlot = true;
+                const currentQueue = this.refreshQueues[providerType];
+                currentQueue.waitingForGlobalSlot = false;
+                currentQueue.ownsGlobalSlot = true;
                 this.activeProviderRefreshes++;
                 tryStartProviderQueue();
             });
@@ -2385,4 +2405,3 @@ export class ProviderPoolManager {
     }
 
 }
-

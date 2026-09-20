@@ -1,7 +1,7 @@
 // Playground 管理模块
 
 import { getAuthHeaders } from './auth.js';
-import { markOnce } from './utils.js';
+import { markOnce, getProviderConfigs } from './utils.js';
 import { t } from './i18n.js';
 
 let providerModels = {};   // { providerType: [model1, model2, ...] }
@@ -60,10 +60,38 @@ async function loadProviderData() {
         if (modelsRes.ok) {
             providerModels = await modelsRes.json();
         }
+
+        // 尝试恢复上次选择的提供商和模型
+        restoreSelections();
     } catch (e) {
         console.error('[Playground] Failed to load provider data:', e);
     } finally {
         updateInputState();
+    }
+}
+
+function restoreSelections() {
+    const savedProvider = localStorage.getItem('pg_selected_provider');
+    const savedModel = localStorage.getItem('pg_selected_model');
+
+    if (savedProvider) {
+        const providerSel = getProviderSelect();
+        if (providerSel) {
+            providerSel.value = savedProvider;
+            // 触发模型列表更新
+            onProviderChange(savedProvider);
+            
+            if (savedModel) {
+                const modelSel = getModelSelect();
+                if (modelSel) {
+                    // 检查模型是否存在于当前提供商
+                    const models = providerModels[savedProvider] || [];
+                    if (models.includes(savedModel)) {
+                        modelSel.value = savedModel;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -73,12 +101,23 @@ function renderProviderOptions(providers) {
 
     sel.innerHTML = `<option value="">${t('playground.selectProvider')}</option>`;
 
-    providers
-        .filter(p => (p.usableNodes || 0) > 0)
-        .forEach(p => {
+    // 使用与凭据管理一致的排序逻辑
+    const supportedIds = providers.map(p => p.id);
+    const orderedConfigs = getProviderConfigs(supportedIds);
+    
+    // 创建快速查找表
+    const providerMap = new Map(providers.map(p => [p.id, p]));
+
+    orderedConfigs
+        .filter(config => {
+            const p = providerMap.get(config.id);
+            return p && (p.usableNodes || 0) > 0;
+        })
+        .forEach(config => {
+            const p = providerMap.get(config.id);
             const opt = document.createElement('option');
             opt.value = p.id;
-            opt.textContent = `● ${p.id} (${p.usableNodes}/${p.totalNodes})`;
+            opt.textContent = `● ${config.name} (${p.usableNodes}/${p.totalNodes})`;
             sel.appendChild(opt);
         });
 }
@@ -91,12 +130,18 @@ function bindEvents() {
     }
 
     document.addEventListener('change', (e) => {
-        if (e.target.id === 'pg-provider-select') onProviderChange(e.target.value);
+        if (e.target.id === 'pg-provider-select') {
+            onProviderChange(e.target.value);
+            localStorage.setItem('pg_selected_provider', e.target.value);
+            // 切换提供商时清除旧模型缓存，强制重新选择或匹配
+            localStorage.removeItem('pg_selected_model');
+        }
     });
 
     document.addEventListener('change', (e) => {
         if (e.target.id === 'pg-model-select') {
             updateInputState();
+            localStorage.setItem('pg_selected_model', e.target.value);
         }
     });
 
@@ -138,6 +183,20 @@ function bindEvents() {
         if (e.target.closest('#pg-stop-btn')) handleStop();
         if (e.target.closest('#pg-clear-btn')) clearChat();
         if (e.target.closest('#pg-attach-btn')) el('pg-file-input')?.click();
+
+        // 移动端响应式选项卡切换
+        const tabBtn = e.target.closest('.pg-tab-btn');
+        if (tabBtn) {
+            const targetTab = tabBtn.getAttribute('data-tab');
+            switchPlaygroundTab(targetTab);
+        }
+
+        // 移动端一键进入对话按钮切换
+        const startChatBtn = e.target.closest('[data-tab-switch]');
+        if (startChatBtn) {
+            const targetTab = startChatBtn.getAttribute('data-tab-switch');
+            switchPlaygroundTab(targetTab);
+        }
     });
 
     document.addEventListener('change', (e) => {
@@ -171,23 +230,25 @@ function onProviderChange(providerType) {
 function updateInputState() {
     const provider = getProviderSelect()?.value;
     const model = getModelSelect()?.value;
-    const ready = !!(provider && model && !isStreaming);
+    const hasSelection = !!(provider && model);
+    const ready = !!(hasSelection && !isStreaming);
 
     const input = getInput();
     const sendBtn = getSendBtn();
     const stopBtn = getStopBtn();
-    
-    if (input) input.disabled = isStreaming || !(provider && model);
-    
-    if (isStreaming) {
-        if (sendBtn) sendBtn.style.display = 'none';
-        if (stopBtn) stopBtn.style.display = 'flex';
-    } else {
-        if (sendBtn) {
-            sendBtn.style.display = 'flex';
-            sendBtn.disabled = !ready;
-        }
-        if (stopBtn) stopBtn.style.display = 'none';
+
+    if (input) {
+        input.disabled = !hasSelection || isStreaming;
+    }
+
+    if (sendBtn) {
+        sendBtn.style.display = isStreaming ? 'none' : 'flex';
+        sendBtn.disabled = !ready;
+    }
+
+    if (stopBtn) {
+        stopBtn.style.display = isStreaming ? 'flex' : 'none';
+        stopBtn.disabled = !isStreaming;
     }
 
     // Update status indicator
@@ -202,6 +263,19 @@ function updateInputState() {
             statusText.textContent = isStreaming ? t('playground.generating') : t('playground.status.unready');
         }
     }
+}
+
+function finalizeRequestUI({ shouldFocusInput = false } = {}) {
+    isStreaming = false;
+    currentAbortController = null;
+    updateInputState();
+
+    const input = getInput();
+    if (shouldFocusInput && input && !input.disabled) {
+        input.focus();
+    }
+
+    scrollToBottom();
 }
 
 // ── Chat logic ────────────────────────────────────────────────────────────────
@@ -235,7 +309,7 @@ async function handleSend() {
     // UI: User message
     const displayText = [
         text,
-        ...filesToSend.map(f => `[附件: ${f.name}]`)
+        ...filesToSend.map(f => `${t('playground.attachPrefix')}${f.name}]`)
     ].filter(Boolean).join('\n');
     appendMessage('user', displayText);
 
@@ -311,7 +385,7 @@ async function imageResponse(provider, model, prompt, files, bubble, interfaceTy
         const isEdit = interfaceType === 'image-edit' || (interfaceType === 'image' && imageFiles.length > 0);
         
         if (isEdit) {
-            if (imageFiles.length === 0) throw new Error('请先上传需要修改的图片');
+            if (imageFiles.length === 0) throw new Error(t('playground.imageEditRequired'));
             
             const formData = new FormData();
             formData.append('model', model);
@@ -359,10 +433,7 @@ async function imageResponse(provider, model, prompt, files, bubble, interfaceTy
             bubble.textContent = errorMsg;
             bubble.closest('.pg-message')?.classList.add('error');
         }
-        isStreaming = false;
-        currentAbortController = null;
-        updateInputState();
-        scrollToBottom();
+        finalizeRequestUI({ shouldFocusInput: true });
     }
 }
 
@@ -414,7 +485,7 @@ async function unaryResponse(provider, model, bubble, params) {
             contentDiv.innerHTML = renderMarkdown(content);
             while (contentDiv.firstChild) bubble.appendChild(contentDiv.firstChild);
             
-            const historyContent = content.replace(/data:[^;]+;base64,[A-Za-z0-9+/=]+/g, '[图片]');
+            const historyContent = content.replace(/data:[^;]+;base64,[A-Za-z0-9+/=]+/g, t('playground.imagePlaceholder'));
             messages.push({role: 'assistant', content: historyContent});
         }
 
@@ -432,10 +503,7 @@ async function unaryResponse(provider, model, bubble, params) {
             const msgWrapper = bubble.closest('.pg-message');
             if (msgWrapper) msgWrapper.style.display = 'flex';
         }
-        isStreaming = false;
-        currentAbortController = null;
-        updateInputState();
-        scrollToBottom();
+        finalizeRequestUI({ shouldFocusInput: true });
     }
 }
 
@@ -539,7 +607,7 @@ async function streamResponse(provider, model, bubble, params) {
             }
         }
 
-        const historyContent = accumulated.replace(/data:[^;]+;base64,[A-Za-z0-9+/=]+/g, '[图片]');
+        const historyContent = accumulated.replace(/data:[^;]+;base64,[A-Za-z0-9+/=]+/g, t('playground.imagePlaceholder'));
         messages.push({role: 'assistant', content: historyContent});
 
     } catch (e) {
@@ -569,10 +637,7 @@ async function streamResponse(provider, model, bubble, params) {
                 while (contentDiv.firstChild) bubble.appendChild(contentDiv.firstChild);
             }
         }
-        isStreaming = false;
-        currentAbortController = null;
-        updateInputState();
-        scrollToBottom();
+        finalizeRequestUI({ shouldFocusInput: true });
     }
 }
 
@@ -628,7 +693,7 @@ function appendMessage(role, text) {
         const actions = document.createElement('div');
         actions.className = 'pg-message-actions';
         actions.innerHTML = `
-            <div class="pg-action-link btn-copy-msg" title="复制文本">
+            <div class="pg-action-link btn-copy-msg" title="${t('playground.copyText')}" data-i18n-title="playground.copyText">
                 <i class="fas fa-copy"></i>
             </div>
         `;
@@ -647,7 +712,7 @@ function appendMessage(role, text) {
         const actions = document.createElement('div');
         actions.className = 'pg-message-actions';
         actions.innerHTML = `
-            <div class="pg-action-link btn-retry-msg" title="重试此对话">
+            <div class="pg-action-link btn-retry-msg" title="${t('playground.retryConversation')}" data-i18n-title="playground.retryConversation">
                 <i class="fas fa-sync-alt"></i>
             </div>
         `;
@@ -730,6 +795,16 @@ function isSafeImageUrl(url) {
     return url.startsWith('data:image/') || /^https?:\/\//.test(url);
 }
 
+function isSafeVideoUrl(url) {
+    return /^https?:\/\/[^\s"'<>]+$/i.test(url) &&
+        /\.(mp4|webm|mov|m4v)(\?[^"'<>]*)?$/i.test(url);
+}
+
+function renderVideoPlayer(url, label = 'Play Video') {
+    if (!isSafeVideoUrl(url)) return '';
+    return `<div class="pg-video-block"><video src="${url}" controls preload="metadata" playsinline></video><a href="${url}" target="_blank" rel="noopener noreferrer">${label || 'Play Video'}</a></div>`;
+}
+
 function renderMarkdown(text) {
     const blocks = [];
     // Protect code blocks
@@ -749,12 +824,28 @@ function renderMarkdown(text) {
     text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
 
+    // Linked video thumbnails: [![video](thumb)](video.mp4)
+    const renderedVideos = new Set();
+    text = text.replace(/\[!\[([^\]]*)\]\(([^)]+)\)\]\((https?:\/\/[^)]+)\)/g, (match, alt, thumbUrl, videoUrl) => {
+        if (!isSafeVideoUrl(videoUrl)) return match;
+        renderedVideos.add(videoUrl);
+        return renderVideoPlayer(videoUrl, alt || 'Play Video');
+    });
+
+    // Video links
+    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, (match, label, url) => {
+        if (!isSafeVideoUrl(url)) return match;
+        if (renderedVideos.has(url)) return '';
+        renderedVideos.add(url);
+        return renderVideoPlayer(url, label);
+    });
+
     // Basic images/links
     text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
         if (!isSafeImageUrl(url)) return match;
         return `<img src="${url}" alt="${alt}" style="max-width:100%;border-radius:8px;margin:0.5rem 0;display:block">`;
     });
-    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 
     // Newlines
     text = text.replace(/\n/g, '<br>');
@@ -862,4 +953,30 @@ function renderAttachmentPreview() {
         };
         preview.appendChild(tag);
     });
+}
+
+function switchPlaygroundTab(tabName) {
+    const pg = el('playground');
+    if (!pg) return;
+
+    pg.classList.remove('active-tab-chat', 'active-tab-settings', 'active-tab-parameters');
+    pg.classList.add(`active-tab-${tabName}`);
+
+    const tabs = pg.querySelectorAll('.pg-tab-btn');
+    tabs.forEach(btn => {
+        if (btn.getAttribute('data-tab') === tabName) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+
+    if (tabName === 'chat') {
+        setTimeout(() => {
+            const input = getInput();
+            if (input && !input.disabled) {
+                input.focus();
+            }
+        }, 100);
+    }
 }

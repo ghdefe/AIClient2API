@@ -32,7 +32,9 @@ export const NETWORK = {
     // 最大端口号
     MAX_PORT: 65535,
     // 默认服务器端口
-    DEFAULT_PORT: 3000
+    DEFAULT_PORT: 3000,
+    // 默认超时时间（毫秒）
+    DEFAULT_TIMEOUT: 120000
 };
 
 // 请求重试相关常量
@@ -57,6 +59,9 @@ export const MODEL_PROVIDER = {
     GEMINI_CLI: 'gemini-cli-oauth',
     ANTIGRAVITY: 'gemini-antigravity',
     OPENAI_CUSTOM: 'openai-custom',
+    ATLASCLOUD: 'atlascloud',
+    QINIU: 'qiniu',
+    FENNO: 'fenno',
     OPENAI_CUSTOM_RESPONSES: 'openaiResponses-custom',
     CLAUDE_CUSTOM: 'claude-custom',
     KIRO_API: 'claude-kiro-oauth',
@@ -65,15 +70,26 @@ export const MODEL_PROVIDER = {
     CODEX_API: 'openai-codex-oauth',
     FORWARD_API: 'forward-api',
     GROK_WEB: 'grok-web',
+    GROK_CLI: 'grok-cli-oauth',
     AUTO: 'auto',
 };
 
 // 图像生成模型常量
 export const SUPPORTED_IMAGE_MODELS = new Set([
     'gpt-image-2',
+    'grok-imagine-image-quality',
+    'grok-imagine-image',
+    'grok-imagine-image-pro',
     'grok-imagine-1.0',
     'grok-imagine-1.0-edit',
     'gemini-3.1-flash-image'
+]);
+
+// 视频生成模型常量
+export const SUPPORTED_VIDEO_MODELS = new Set([
+    'grok-imagine-video',
+    'grok-imagine-video-1.5-preview',
+    'grok-imagine-video-1.5-2026-05-30'
 ]);
 
 // UI 相关的路径常量

@@ -8,15 +8,109 @@ import os from 'os';
 import {refreshCodexTokensWithRetry} from '../../auth/oauth-handlers.js';
 import {getProviderPoolManager} from '../../services/service-manager.js';
 import {configureTLSSidecar, isTLSSidecarEnabledForProvider} from '../../utils/proxy-utils.js';
-import {MODEL_PROVIDER, formatExpiryLog} from '../../utils/common.js';
+import {MODEL_PROVIDER, formatExpiryLog, normalizeProviderErrorMessage} from '../../utils/common.js';
 import {getProxyConfigForProvider} from '../../utils/proxy-utils.js';
 import {getProviderModels} from '../provider-models.js';
+import {normalizeCodexInstructions} from './codex-request-utils.js';
 
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
 const CODEX_MODELS = [...new Set([...baseModels, ...fastModels])];
-const CODEX_VERSION = '0.130.0';
+const CODEX_VERSION = '0.153.3';
 export const IMAGE_MODELS = new Set(['gpt-image-2']);
+
+function normalizeCodexTerminalError(parsed) {
+    if (!parsed || typeof parsed !== 'object') {
+        return null;
+    }
+
+    let errorBody = null;
+    if (parsed.type === 'error') {
+        errorBody = parsed.error && typeof parsed.error === 'object'
+            ? parsed.error
+            : { message: parsed.message || parsed.error || 'Codex API error' };
+    } else if (parsed.type === 'response.failed') {
+        errorBody = parsed.response?.error || parsed.error;
+        if (!errorBody) {
+            errorBody = { message: parsed.response?.error?.message || parsed.message || 'Codex response failed' };
+        }
+    }
+
+    if (!errorBody) {
+        return null;
+    }
+
+    if (typeof errorBody !== 'object') {
+        errorBody = { message: String(errorBody) };
+    }
+    if (!errorBody.message) {
+        errorBody.message = errorBody.code || errorBody.type || 'Codex API error';
+    }
+    return errorBody;
+}
+
+function createCodexTerminalError(parsed) {
+    const errorBody = normalizeCodexTerminalError(parsed);
+    if (!errorBody) {
+        return null;
+    }
+
+    const error = new Error(`Codex API error: ${errorBody.message}`);
+    error.response = {
+        status: isCodexUsageLimitError(errorBody) || isCodexModelCapacityError(errorBody) ? 429 : 400,
+        data: { error: errorBody }
+    };
+    if (shouldSwitchCodexCredential(errorBody)) {
+        error.shouldSwitchCredential = true;
+        error.skipErrorCount = true;
+    }
+    if (isCodexUsageLimitError(errorBody)) {
+        const retryAfterMs = parseCodexRetryAfterMs(errorBody);
+        if (retryAfterMs !== null) {
+            error.retryAfterMs = retryAfterMs;
+        }
+    }
+    return error;
+}
+
+function shouldSwitchCodexCredential(errorBody) {
+    const code = String(errorBody?.code || '').toLowerCase();
+    const type = String(errorBody?.type || '').toLowerCase();
+    return code === 'insufficient_quota' || type === 'insufficient_quota' || isCodexUsageLimitError(errorBody) || isCodexModelCapacityError(errorBody);
+}
+
+function isCodexUsageLimitError(errorBody) {
+    return String(errorBody?.type || '').trim().toLowerCase() === 'usage_limit_reached';
+}
+
+function isCodexModelCapacityError(errorBody) {
+    const msg = String(errorBody?.message || '').trim().toLowerCase();
+    return msg.includes('selected model is at capacity') || msg.includes('model is at capacity. please try a different model');
+}
+
+function parseCodexRetryAfterMs(errorBody) {
+    const resetsAt = Number(errorBody?.resets_at);
+    if (Number.isFinite(resetsAt) && resetsAt > 0) {
+        const delay = resetsAt * 1000 - Date.now();
+        return delay > 0 ? delay : null;
+    }
+    const resetsInSeconds = Number(errorBody?.resets_in_seconds);
+    if (Number.isFinite(resetsInSeconds) && resetsInSeconds > 0) {
+        return resetsInSeconds * 1000;
+    }
+    return null;
+}
+
+function extractSSEData(line) {
+    const trimmedLine = String(line || '').trim();
+    if (!trimmedLine || trimmedLine.startsWith(':') || trimmedLine.startsWith('event:') || trimmedLine.startsWith('id:') || trimmedLine.startsWith('retry:')) {
+        return null;
+    }
+    if (trimmedLine.startsWith('data:')) {
+        return trimmedLine.slice(5).trim();
+    }
+    return trimmedLine;
+}
 
 /**
  * Codex API 服务类
@@ -33,6 +127,7 @@ export class CodexApiService {
         this.idToken = null;
         this.last_refresh = null;
         this.credsPath = null; // 记录本次加载/使用的凭据文件路径，确保刷新后写回同一文件
+        this.accessTokenOnlyRefreshLogged = false;
         this.uuid = config.uuid; // 保存 uuid 用于号池管理
         this.isInitialized = false;
 
@@ -138,6 +233,10 @@ export class CodexApiService {
         // 注意：在 V2 架构下，此方法主要由 PoolManager 的后台队列调用
         if (needsRefresh || !this.accessToken) {
             if (!this.refreshToken) {
+                if (this.accessToken) {
+                    this.logAccessTokenOnlyRefreshSkipped();
+                    return;
+                }
                 throw new Error('Codex credentials not found. Please authenticate first using OAuth.');
             }
             logger.info('[Codex] Token expiring soon or refresh requested, refreshing...');
@@ -149,6 +248,11 @@ export class CodexApiService {
      * 后台异步刷新 token（不阻塞当前请求）
      */
     triggerBackgroundRefresh() {
+        if (!this.refreshToken) {
+            this.logAccessTokenOnlyRefreshSkipped();
+            return;
+        }
+
         const poolManager = getProviderPoolManager();
         if (poolManager && this.uuid) {
             logger.info(`[Codex] Token is near expiry, marking credential ${this.uuid} for background refresh`);
@@ -156,6 +260,12 @@ export class CodexApiService {
                 uuid: this.uuid
             });
         }
+    }
+
+    logAccessTokenOnlyRefreshSkipped() {
+        if (this.accessTokenOnlyRefreshLogged) return;
+        this.accessTokenOnlyRefreshLogged = true;
+        logger.warn('[Codex] Access-token-only credential cannot be refreshed because refresh_token is empty. Re-import or re-authenticate when it expires.');
     }
 
     /**
@@ -168,7 +278,10 @@ export class CodexApiService {
 
         let selectedModel = model;
         if (!CODEX_MODELS.includes(model)) {
-            const defaultModel = CODEX_MODELS[0] || 'gpt-5';
+            if (this.config.MODEL_FALLBACK_ENABLED === false) {
+                throw new Error(`[Codex] 模型不存在: ${model}`);
+            }
+            const defaultModel = CODEX_MODELS[0] || 'gpt-5.5';
             logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
             selectedModel = defaultModel;
         }
@@ -191,24 +304,12 @@ export class CodexApiService {
         const body = await this.prepareRequestBody(selectedModel, requestBody, true);
         const headers = this.buildHeaders(body.prompt_cache_key, true);
 
-        // 检查是否启用了 TLS Sidecar
-        const isTLSSidecarEnabled = isTLSSidecarEnabledForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API);
-
         try {
             const config = {
                 headers,
                 responseType: 'text', // 确保以文本形式接收 SSE 流
                 timeout: 300000 // 5 分钟超时，适应慢速模型
             };
-
-            // 配置代理（如果未启用 TLS Sidecar）
-            if (!isTLSSidecarEnabled) {
-                const proxyConfig = getProxyConfigForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API);
-                if (proxyConfig) {
-                    config.httpAgent = proxyConfig.httpAgent;
-                    config.httpsAgent = proxyConfig.httpsAgent;
-                }
-            }
 
             const axiosRequestConfig = {
                 method: 'post',
@@ -224,6 +325,7 @@ export class CodexApiService {
         } catch (error) {
             if (error.response?.status === 401) {
                 logger.info('[Codex] Received 401. Triggering background refresh...');
+                await normalizeProviderErrorMessage(error, { status: 401, context: 'non-stream' });
 
                 // 触发后台异步刷新
                 this.triggerBackgroundRefresh();
@@ -234,8 +336,10 @@ export class CodexApiService {
                 error.skipErrorCount = true;
                 throw error;
             } else {
-                const errBody = error.response?.data ? String(error.response.data).slice(0, 500) : '';
-                logger.error(`[Codex] Error calling non-stream API (Status: ${error.response?.status}, Code: ${error.code || 'N/A'}): ${error.message}${errBody ? ` | body: ${errBody}` : ''}`);
+                if (error.response?.status) {
+                    await normalizeProviderErrorMessage(error, { status: error.response.status, context: 'non-stream' });
+                }
+                logger.error(`[Codex] Error calling non-stream API (Status: ${error.response?.status}, Code: ${error.code || 'N/A'}): ${error.message}`);
                 throw error;
             }
         }
@@ -251,7 +355,10 @@ export class CodexApiService {
 
         let selectedModel = model;
         if (!CODEX_MODELS.includes(model)) {
-            const defaultModel = CODEX_MODELS[0] || 'gpt-5';
+            if (this.config.MODEL_FALLBACK_ENABLED === false) {
+                throw new Error(`[Codex] 模型不存在: ${model}`);
+            }
+            const defaultModel = CODEX_MODELS[0] || 'gpt-5.5';
             logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
             selectedModel = defaultModel;
         }
@@ -274,24 +381,12 @@ export class CodexApiService {
         const body = await this.prepareRequestBody(selectedModel, requestBody, true);
         const headers = this.buildHeaders(body.prompt_cache_key, true);
 
-        // 检查是否启用了 TLS Sidecar
-        const isTLSSidecarEnabled = isTLSSidecarEnabledForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API);
-
         try {
             const config = {
                 headers,
                 responseType: 'stream',
                 timeout: 300000 // 5 分钟超时
             };
-
-            // 配置代理（如果未启用 TLS Sidecar）
-            if (!isTLSSidecarEnabled) {
-                const proxyConfig = getProxyConfigForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API);
-                if (proxyConfig) {
-                    config.httpAgent = proxyConfig.httpAgent;
-                    config.httpsAgent = proxyConfig.httpsAgent;
-                }
-            }
 
             const axiosRequestConfig = {
                 method: 'post',
@@ -307,6 +402,7 @@ export class CodexApiService {
         } catch (error) {
             if (error.response?.status === 401) {
                 logger.info('[Codex] Received 401 during stream. Triggering background refresh...');
+                await normalizeProviderErrorMessage(error, { status: 401, context: 'stream' });
 
                 // 触发后台异步刷新
                 this.triggerBackgroundRefresh();
@@ -317,6 +413,9 @@ export class CodexApiService {
                 error.skipErrorCount = true;
                 throw error;
             } else {
+                if (error.response?.status) {
+                    await normalizeProviderErrorMessage(error, { status: error.response.status, context: 'stream' });
+                }
                 logger.error(`[Codex] Error calling streaming API (Status: ${error.response?.status}, Code: ${error.code || 'N/A'}):`, error.message);
                 throw error;
             }
@@ -357,6 +456,23 @@ export class CodexApiService {
     }
 
     /**
+     * 构建 Codex 管理类接口请求头
+     */
+    buildManagementHeaders() {
+        return {
+            'authorization': `Bearer ${this.accessToken}`,
+            'chatgpt-account-id': this.accountId,
+            'oai-language': 'zh-CN',
+            'originator': 'Codex Desktop',
+            'accept': 'application/json',
+            'sec-fetch-site': 'none',
+            'sec-fetch-mode': 'no-cors',
+            'sec-fetch-dest': 'empty',
+            'priority': 'u=4, i'
+        };
+    }
+
+    /**
      * 准备请求体
      */
     async prepareRequestBody(model, requestBody, stream) {
@@ -373,12 +489,19 @@ export class CodexApiService {
         const defaultServiceTier = isFastModel ? 'priority' : 'default';
         const defaultReasoningEffort = isFastModel ? 'xhigh' : 'medium';
 
-        // 图像生成模型：gpt-image-2 通过 image_generation 工具 + gpt-5.4 实现
+        // 图像生成模型：gpt-image-2 通过 image_generation 工具 + gpt-5.5 实现
         const isImageModel = IMAGE_MODELS.has(upstreamModel);
-        const effectiveUpstreamModel = isImageModel ? 'gpt-5.4' : upstreamModel;
+        const effectiveUpstreamModel = isImageModel ? 'gpt-5.5' : upstreamModel;
 
         const cleanedBody = {...requestBody};
         delete cleanedBody.metadata;
+        delete cleanedBody.previous_response_id;
+        delete cleanedBody.prompt_cache_retention;
+        delete cleanedBody.safety_identifier;
+        delete cleanedBody.stream_options;
+
+        // Codex 接受顶层 instructions，但拒绝 input 中的 system/developer 消息。
+        normalizeCodexInstructions(cleanedBody);
 
         // 【关键修复】确保传给上游的模型名称不带 -fast 后缀
         // 即使 originalRequestBody 中已经带了 model，这里也必须覆盖
@@ -455,6 +578,12 @@ export class CodexApiService {
         };
 
         delete result.messages;
+        if (!result.instructions) {
+            result.instructions = '';
+        }
+        if (!Array.isArray(result.tools) || result.tools.length === 0) {
+            delete result.parallel_tool_calls;
+        }
 
         if (result.service_tier !== 'priority') {
             delete result.service_tier;
@@ -484,6 +613,11 @@ export class CodexApiService {
      * 刷新访问令牌
      */
     async refreshAccessToken() {
+        if (!this.refreshToken) {
+            this.logAccessTokenOnlyRefreshSkipped();
+            throw new Error('Cannot refresh Codex access-token-only credential without refresh_token.');
+        }
+
         try {
             const newTokens = await refreshCodexTokensWithRetry(this.refreshToken, this.config);
 
@@ -555,7 +689,7 @@ export class CodexApiService {
 
         // 3) 兜底：写入 configs/codex（与 OAuth 保存默认目录保持一致，避免“读取 configs/codex、写入 .codex”导致永远读到旧 token）
         const projectDir = process.cwd();
-        return path.join(projectDir, 'configs', 'codex', `${Date.now()}_codex-${email}.json`);
+        return path.join(projectDir, 'configs', 'codex', `${Date.now()}_codex-${email}_oauth_creds.json`);
     }
 
     /**
@@ -666,23 +800,16 @@ export class CodexApiService {
             for (const line of lines) {
                 const trimmedLine = line.trim();
                 if (!trimmedLine) continue;
-                // skip SSE metadata lines (event:, id:, retry:)
-                if (!trimmedLine.startsWith('data: ')) continue;
-
-                const dataStr = trimmedLine.slice(6).trim();
+                const dataStr = extractSSEData(trimmedLine);
 
                 if (dataStr && dataStr !== '[DONE]') {
                     try {
                         let parsed = JSON.parse(dataStr);
 
-                        if (parsed.type === 'error') {
-                            logger.error('[Codex] API returned error in stream:', parsed.error || parsed);
-                            const errorMsg = (parsed.error && parsed.error.message) || JSON.stringify(parsed.error || parsed);
-                            const error = new Error(`Codex API error: ${errorMsg}`);
-                            if (parsed.error?.code === 'insufficient_quota' || parsed.error?.type === 'insufficient_quota') {
-                                error.shouldSwitchCredential = true;
-                                error.skipErrorCount = true;
-                            }
+                        const terminalError = createCodexTerminalError(parsed);
+                        if (terminalError) {
+                            logger.error('[Codex] API returned terminal error in stream:', parsed.error || parsed.response?.error || parsed);
+                            const error = terminalError;
                             throw error;
                         }
 
@@ -705,21 +832,17 @@ export class CodexApiService {
 
         // 处理剩余的 buffer
         const finalTrimmed = buffer.trim();
-        if (finalTrimmed && finalTrimmed.startsWith('data: ')) {
-            const dataStr = finalTrimmed.slice(6).trim();
+        if (finalTrimmed) {
+            const dataStr = extractSSEData(finalTrimmed);
 
             if (dataStr && dataStr !== '[DONE]') {
                 try {
                     let parsed = JSON.parse(dataStr);
 
-                    if (parsed.type === 'error') {
-                        logger.error('[Codex] API returned error in final stream buffer:', parsed.error || parsed);
-                        const errorMsg = (parsed.error && parsed.error.message) || JSON.stringify(parsed.error || parsed);
-                        const error = new Error(`Codex API error: ${errorMsg}`);
-                        if (parsed.error?.code === 'insufficient_quota' || parsed.error?.type === 'insufficient_quota') {
-                            error.shouldSwitchCredential = true;
-                            error.skipErrorCount = true;
-                        }
+                    const terminalError = createCodexTerminalError(parsed);
+                    if (terminalError) {
+                        logger.error('[Codex] API returned terminal error in final stream buffer:', parsed.error || parsed.response?.error || parsed);
+                        const error = terminalError;
                         throw error;
                     }
 
@@ -765,10 +888,7 @@ export class CodexApiService {
                 continue;
             }
 
-            let jsonData = trimmedLine;
-            if (trimmedLine.startsWith('data: ')) {
-                jsonData = trimmedLine.slice(6).trim();
-            }
+            const jsonData = extractSSEData(trimmedLine);
 
             if (!jsonData || jsonData === '[DONE]') {
                 continue;
@@ -778,14 +898,12 @@ export class CodexApiService {
                 let parsed = JSON.parse(jsonData);
                 switch (parsed.type) {
                     case 'error':
-                        logger.error('[Codex] API returned error:', parsed.error || parsed);
-                        const errorMsg = (parsed.error && parsed.error.message) || JSON.stringify(parsed.error || parsed);
-                        const error = new Error(`Codex API error: ${errorMsg}`);
-                        if (parsed.error?.code === 'insufficient_quota' || parsed.error?.type === 'insufficient_quota') {
-                            error.shouldSwitchCredential = true;
-                            error.skipErrorCount = true;
-                        }
-                        throw error;
+                    case 'response.failed': {
+                        logger.error('[Codex] API returned terminal error:', parsed.error || parsed.response?.error || parsed);
+                        const error = createCodexTerminalError(parsed);
+                        if (error) throw error;
+                        break;
+                    }
                     case 'response.output_item.added':
                         if (parsed.item) {
                             outputItems.set(parsed.item.id, parsed.item);
@@ -931,41 +1049,22 @@ export class CodexApiService {
     }
 
     /**
-     * 获取使用限制信息
-     * @returns {Promise<Object>} 使用限制信息（通用格式）
+     * 获取使用限制信息（返回 API 原始数据）
+     * @returns {Promise<Object>} 原始响应数据
      */
     async getUsageLimits() {
         if (!this.isInitialized) {
             await this.initialize();
         }
 
-        // 检查是否启用了 TLS Sidecar
-        const isTLSSidecarEnabled = isTLSSidecarEnabledForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API);
-
         try {
             const url = 'https://chatgpt.com/backend-api/wham/usage';
-            const headers = {
-                'user-agent': `codex-tui/${CODEX_VERSION} (Windows 10.0.26100; x86_64) WindowsTerminal (codex-tui; ${CODEX_VERSION})`,
-                'authorization': `Bearer ${this.accessToken}`,
-                'chatgpt-account-id': this.accountId,
-                'accept': '*/*',
-                'host': 'chatgpt.com',
-                'Connection': 'close'
-            };
+            const headers = this.buildManagementHeaders();
 
             const config = {
                 headers,
-                timeout: 30000 // 30 秒超时
+                timeout: 30000
             };
-
-            // 配置代理（如果未启用 TLS Sidecar）
-            if (!isTLSSidecarEnabled) {
-                const proxyConfig = getProxyConfigForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CODEX_API);
-                if (proxyConfig) {
-                    config.httpAgent = proxyConfig.httpAgent;
-                    config.httpsAgent = proxyConfig.httpsAgent;
-                }
-            }
 
             const axiosRequestConfig = {
                 method: 'get',
@@ -975,64 +1074,71 @@ export class CodexApiService {
             this._applySidecar(axiosRequestConfig);
 
             const response = await axios.request(axiosRequestConfig);
-
-            // 解析响应数据并转换为通用格式
-            const data = response.data;
-
-            // 通用格式：{ lastUpdated, models: { "model-id": { remaining, resetTime, resetTimeRaw } } }
-            const result = {
-                lastUpdated: Date.now(),
-                models: {}
+            return {
+                ...response.data,
+                account: this.email
             };
-
-            // 从 rate_limit 提取配额信息
-            // Codex 使用百分比表示使用量，我们需要转换为剩余量
-            if (data.rate_limit) {
-                const primaryWindow = data.rate_limit.primary_window;
-                const secondaryWindow = data.rate_limit.secondary_window;
-
-                // 使用主窗口的数据作为主要配额信息
-                if (primaryWindow) {
-                    // remaining = 1 - (used_percent / 100)
-                    const remaining = 1 - (primaryWindow.used_percent || 0) / 100;
-                    const resetTime = primaryWindow.reset_at ? new Date(primaryWindow.reset_at * 1000).toISOString() : null;
-
-                    // 为所有 Codex 模型设置相同的配额信息
-                    const codexModels = ['default'];
-                    for (const modelId of codexModels) {
-                        result.models[modelId] = {
-                            remaining: Math.max(0, Math.min(1, remaining)), // 确保在 0-1 之间
-                            resetTime: resetTime,
-                            resetTimeRaw: primaryWindow.reset_at
-                        };
-                    }
-                }
-            }
-
-            // 保存原始响应数据供需要时使用
-            result.raw = {
-                planType: data.plan_type || 'unknown',
-                rateLimit: data.rate_limit,
-                codeReviewRateLimit: data.code_review_rate_limit,
-                credits: data.credits
-            };
-
-            logger.info(`[Codex] Successfully fetched usage limits for plan: ${result.raw.planType}`);
-            return result;
         } catch (error) {
             if (error.response?.status === 401) {
                 logger.info('[Codex] Received 401 during getUsageLimits. Triggering background refresh...');
-
-                // 触发后台异步刷新
                 this.triggerBackgroundRefresh();
                 error.credentialMarkedUnhealthy = true;
-
-                // Mark error for credential switch without recording error count
                 error.shouldSwitchCredential = true;
                 error.skipErrorCount = true;
             }
 
             logger.error('[Codex] Failed to get usage limits:', error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * 消耗一次 Codex 额度重置次数
+     * @returns {Promise<Object>} 重置结果与最新用量
+     */
+    async resetUsageQuota() {
+        if (!this.isInitialized) {
+            await this.initialize();
+        }
+
+        try {
+            const url = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume';
+            const headers = {
+                ...this.buildManagementHeaders(),
+                'content-type': 'application/json'
+            };
+            const body = {
+                redeem_request_id: crypto.randomUUID()
+            };
+
+            const axiosRequestConfig = {
+                method: 'post',
+                url,
+                data: body,
+                headers,
+                timeout: 30000
+            };
+            this._applySidecar(axiosRequestConfig);
+
+            const response = await axios.request(axiosRequestConfig);
+            const latestUsage = await this.getUsageLimits();
+
+            return {
+                success: true,
+                resetResult: response.data,
+                usage: latestUsage,
+                account: this.email
+            };
+        } catch (error) {
+            if (error.response?.status === 401) {
+                logger.info('[Codex] Received 401 during resetUsageQuota. Triggering background refresh...');
+                this.triggerBackgroundRefresh();
+                error.credentialMarkedUnhealthy = true;
+                error.shouldSwitchCredential = true;
+                error.skipErrorCount = true;
+            }
+
+            logger.error('[Codex] Failed to reset usage quota:', error.message);
             throw error;
         }
     }

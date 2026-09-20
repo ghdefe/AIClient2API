@@ -32,22 +32,6 @@ export class ClaudeApiService {
      * @returns {object} Axios instance.
      */
     createClient() {
-        // 配置 HTTP/HTTPS agent 限制连接池大小，避免资源泄漏
-        const httpAgent = new http.Agent({
-            keepAlive: true,
-            maxSockets: 100,
-            maxFreeSockets: 5,
-            timeout: 120000,
-        });
-        const httpsAgent = new https.Agent({
-            keepAlive: true,
-            maxSockets: 100,
-            maxFreeSockets: 5,
-            timeout: 120000,
-        });
-
-        const isTLSSidecarEnabled = isTLSSidecarEnabledForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CLAUDE_CUSTOM);
-        
         const axiosConfig = {
             baseURL: this.baseUrl,
             headers: {
@@ -56,14 +40,6 @@ export class ClaudeApiService {
                 'anthropic-version': '2023-06-01', // Claude API 版本
             },
         };
-
-        // 如果启用了 TLS Sidecar，就不配置 httpAgent 和 httpsAgent，避免配置冲突
-        if (!isTLSSidecarEnabled) {
-            axiosConfig.httpAgent = httpAgent;
-            axiosConfig.httpsAgent = httpsAgent;
-            // 配置自定义代理
-            configureAxiosProxy(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.CLAUDE_CUSTOM);
-        }
         
         return axios.create(axiosConfig);
     }
@@ -285,14 +261,27 @@ export class ClaudeApiService {
 
     /**
      * Lists available models.
-     * The Claude API does not have a direct '/models' endpoint; typically, supported models need to be hardcoded.
      * @returns {Promise<object>} List of models.
      */
     async listModels() {
         logger.info('[ClaudeApiService] Listing available models.');
-        // Claude API 没有直接的 /models 端点来列出所有模型。
-        // 通常，你需要根据 Anthropic 的文档硬编码你希望支持的模型。
-        // 这里我们返回一些常见的 Claude 模型作为示例。
+        try {
+            const axiosConfig = {
+                method: 'get',
+                url: '/models'
+            };
+            this._applySidecar(axiosConfig);
+            const response = await this.client.request(axiosConfig);
+            if (Array.isArray(response.data?.data)) {
+                return { models: response.data.data };
+            }
+            return response.data;
+        } catch (error) {
+            const status = error.response?.status;
+            const data = error.response?.data;
+            logger.warn(`[ClaudeApiService] Failed to fetch models from upstream (Status: ${status || 'N/A'}), using fallback list:`, data || error.message);
+        }
+
         const models = [
             { id: "claude-4-sonnet", name: "claude-4-sonnet" },
             { id: "claude-sonnet-4-20250514", name: "claude-sonnet-4-20250514" },

@@ -1,5 +1,6 @@
 node_modules
 logs/
+logs.txt
 .serena/
 .claude/
 CLAUDE.md
@@ -13,8 +14,11 @@ token-store.json
 usage-cache.json
 *_oauth_creds.json
 *-auth-token.json
+*_codex-*.json
 api-potluck-keys.json
 api-potluck-data.json
 model-usage-stats.json
 AGENTS.md
+src/plugins-user/
 
+/.codegraph/

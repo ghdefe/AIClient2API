@@ -3,36 +3,13 @@ import logger from '../../utils/logger.js';
 import * as http from 'http';
 import * as https from 'https';
 import { v4 as uuidv4 } from 'uuid';
-import { MODEL_PROTOCOL_PREFIX, isRetryableNetworkError, getRetryAfterMs } from '../../utils/common.js';
-import { getProviderModels } from '../provider-models.js';
+import { MODEL_PROTOCOL_PREFIX, isRetryableNetworkError, getRetryAfterMs, normalizeProviderErrorMessage, getNormalizedErrorResponseText } from '../../utils/common.js';
 import { configureAxiosProxy, configureTLSSidecar, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
 import { MODEL_PROVIDER } from '../../utils/common.js';
 import { ConverterFactory } from '../../converters/ConverterFactory.js';
 import * as readline from 'readline';
 import { getProviderPoolManager } from '../../services/service-manager.js';
 import { ImagineWebSocketService } from './ws-imagine.js';
-
-// Chrome 136 TLS cipher suites
-const CHROME_CIPHERS = [
-    'TLS_AES_128_GCM_SHA256', 'TLS_AES_256_GCM_SHA384', 'TLS_CHACHA20_POLY1305_SHA256',
-    'ECDHE-ECDSA-AES128-GCM-SHA256', 'ECDHE-RSA-AES128-GCM-SHA256', 'ECDHE-ECDSA-AES256-GCM-SHA384',
-    'ECDHE-RSA-AES256-GCM-SHA384', 'ECDHE-ECDSA-CHACHA20-POLY1305', 'ECDHE-RSA-CHACHA20-POLY1305',
-    'ECDHE-RSA-AES128-SHA', 'ECDHE-RSA-AES256-SHA', 'AES128-GCM-SHA256', 'AES256-GCM-SHA384',
-    'AES128-SHA', 'AES256-SHA',
-].join(':');
-
-const CHROME_SIGALGS = [
-    'ecdsa_secp256r1_sha256', 'rsa_pss_rsae_sha256', 'rsa_pkcs1_sha256',
-    'ecdsa_secp384r1_sha384', 'rsa_pss_rsae_sha384', 'rsa_pkcs1_sha384',
-    'rsa_pss_rsae_sha512', 'rsa_pkcs1_sha512',
-].join(':');
-
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 100, maxFreeSockets: 5, timeout: 120000 });
-const httpsAgent = new https.Agent({
-    keepAlive: true, maxSockets: 100, maxFreeSockets: 5, timeout: 120000,
-    ciphers: CHROME_CIPHERS, sigalgs: CHROME_SIGALGS, minVersion: 'TLSv1.2', maxVersion: 'TLSv1.3',
-    ALPNProtocols: ['http/1.1'], ecdhCurve: 'X25519:P-256:P-384', honorCipherOrder: false, sessionTimeout: 300,
-});
 
 const CORE_MODEL_MAPPING = {
     'grok-4.1-mini': { name: 'grok-4-1-thinking-1129', mode: 'MODEL_MODE_GROK_4_1_MINI_THINKING', modeId: 'grok-4-1-mini' },
@@ -83,6 +60,7 @@ export class GrokApiService {
         this.uuid = config.uuid;
         this.token = config.GROK_COOKIE_TOKEN;
         this.cfClearance = config.GROK_CF_CLEARANCE;
+        this.cfBm = config.GROK_CF_BM;
         this.userAgent = config.GROK_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36';
         this.baseUrl = config.GROK_BASE_URL || 'https://grok.com';
         this.chatApi = `${this.baseUrl}/rest/app-chat/conversations/new`;
@@ -102,29 +80,28 @@ export class GrokApiService {
         return 3;
     }
 
-    classifyApiError(error) {
+    async classifyApiError(error, context = 'request') {
         let status = error.response?.status;
         const errorCode = error.code;
-        const errorMessage = error.message || '';
+        const originalErrorMessage = error.message || '';
         const isNetworkError = isRetryableNetworkError(error);
 
         // 如果是 WS 错误，尝试从 message 中提取状态码
-        if (!status && errorMessage.includes('Unexpected server response:')) {
-            const match = errorMessage.match(/Unexpected server response: (\d+)/);
+        if (!status && originalErrorMessage.includes('Unexpected server response:')) {
+            const match = originalErrorMessage.match(/Unexpected server response: (\d+)/);
             if (match) status = parseInt(match[1], 10);
         }
 
-        if (!status && errorMessage.includes('Image rate limit exceeded')) {
+        if (!status && originalErrorMessage.includes('Image rate limit exceeded')) {
             status = 429;
+        }
+
+        if (status) {
+            await normalizeProviderErrorMessage(error, { status, context });
         }
 
         if (status === 401 || status === 403 || status === 429 || status === 502) {
             error.shouldSwitchCredential = true;
-            const messages = {
-                429: 'Grok rate limit reached (429)',
-                502: 'Grok bad gateway (502) - possibly account or proxy issue'
-            };
-            error.message = messages[status] || 'Grok authentication failed (SSO token invalid or expired)';
         } else if (isNetworkError) {
             // Network jitter or request timeout should not immediately degrade account health.
             // Let the upper retry layer switch credential without incrementing the provider error count.
@@ -132,7 +109,7 @@ export class GrokApiService {
             error.skipErrorCount = true;
         }
 
-        return { status, errorCode, errorMessage, isNetworkError };
+        return { status, errorCode, errorMessage: error.message || originalErrorMessage, isNetworkError };
     }
 
     async setupNsfw() {
@@ -230,9 +207,6 @@ export class GrokApiService {
             ...otherOptions
         } = options;
 
-        // 检查是否启用了 TLS Sidecar
-        const isTLSSidecarEnabled = isTLSSidecarEnabledForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.GROK_WEB);
-
         const axiosConfig = { 
             method, 
             url, 
@@ -242,13 +216,6 @@ export class GrokApiService {
             ...otherOptions
         };
         if (responseType) axiosConfig.responseType = responseType;
-
-        // 如果未启用 TLS Sidecar，则配置 httpAgent 和 httpsAgent
-        if (!isTLSSidecarEnabled) {
-            axiosConfig.httpAgent = httpAgent;
-            axiosConfig.httpsAgent = httpsAgent;
-            configureAxiosProxy(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.GROK_WEB);
-        }
         
         this._applySidecar(axiosConfig);
 
@@ -317,7 +284,7 @@ export class GrokApiService {
 
         let lastUserIdx = -1;
         for (let i = extracted.length - 1; i >= 0; i--) { if (extracted[i].role === 'user') { lastUserIdx = i; break; } }
-        const texts = extracted.map((item, i) => i === lastUserIdx ? item.text : `${item.role}: ${item.text}`);
+        const texts = extracted.map((item, i) => item.role === 'user' ? item.text : `[${item.role}]: ${item.text}`);
         let message = texts.join("\n\n");
         if (toolPrompt) message = `${toolPrompt}\n\n${message}`;
         if (!message.trim() && (imageAttachments.length || localFileAttachments.length)) message = "Refer to the following content:";
@@ -353,29 +320,24 @@ export class GrokApiService {
         }
     }
 
+    /**
+     * 获取使用限制信息（返回 API 原始数据）
+     */
     async getUsageLimits() {
         try {
             const response = await this._request({
                 url: `${this.baseUrl}/rest/rate-limits`,
-                data: { "requestKind": "DEFAULT", "modelName": "grok-3" },
+                data: { "requestKind": "DEFAULT", "modelName": "fast" },
                 timeout: 30000
             });
-            const data = response.data;
-            let remaining = data.remainingTokens !== undefined ? data.remainingTokens : (data.remainingQueries !== undefined ? data.remainingQueries : data.totalQueries);
-            if (data.totalQueries > 0) {
-                data.totalLimit = data.totalQueries;
-                data.usedQueries = Math.max(0, data.totalQueries - (data.remainingQueries || 0));
-                data.unit = 'queries';
-            } else {
-                data.totalLimit = data.totalTokens || 0;
-                data.usedQueries = Math.max(0, (data.totalTokens || 0) - (data.remainingTokens || 0));
-                data.unit = 'tokens';
-            }
+            
             this.lastSyncAt = Date.now();
-            this.config.usageData = data;
             this.config.lastHealthCheckTime = new Date().toISOString();
-            return { lastUpdated: this.lastSyncAt, remaining, ...data };
-        } catch (error) { throw error; }
+            
+            return response.data;
+        } catch (error) {
+            throw error;
+        }
     }
 
     isExpiryDateNear() {
@@ -399,28 +361,29 @@ export class GrokApiService {
         if (ssoToken.startsWith("sso=")) ssoToken = ssoToken.substring(4);
         const cookie = ssoToken ? [`sso=${ssoToken}`, `sso-rw=${ssoToken}`] : [];
         if (this.cfClearance) cookie.push(`cf_clearance=${this.cfClearance}`);
+        if (this.cfBm) cookie.push(`__cf_bm=${this.cfBm}`);
+
+        const statsigId = this.config.GROK_STATSIG_ID || this.genStatsigId();
+
         return {
             'accept': '*/*',
-            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,ja;q=0.7',
+            'accept-language': 'zh-CN,zh;q=0.9',
             'content-type': 'application/json',
             'cookie': cookie.join('; '),
             'origin': this.baseUrl,
             'priority': 'u=1, i',
             'referer': `${this.baseUrl}/`,
-            'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-            'sec-ch-ua-arch': '"x86"',
-            'sec-ch-ua-bitness': '"64"',
+            'sec-ch-ua': '"Chromium";v="143", "Google Chrome";v="143", "Not/A)Brand";v="99"',
             'sec-ch-ua-full-version': '"143.0.7499.110"',
-            'sec-ch-ua-full-version-list': '"Google Chrome";v="143.0.7499.110", "Chromium";v="143.0.7499.110", "Not A(Brand";v="24.0.0.0"',
+            'sec-ch-ua-full-version-list': '"Chromium";v="143.0.7499.110", "Google Chrome";v="143.0.7499.110", "Not/A)Brand";v="99.0.0.0"',
             'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-model': '""',
             'sec-ch-ua-platform': '"Windows"',
             'sec-ch-ua-platform-version': '"19.0.0"',
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
             'sec-fetch-site': 'same-origin',
             'user-agent': this.userAgent,
-            'x-statsig-id': this.genStatsigId(),
+            'x-statsig-id': statsigId,
             'x-xai-request-id': uuidv4()
         };
     }
@@ -472,7 +435,7 @@ export class GrokApiService {
             if (postId) logger.info(`[Grok Post] Media post created: ${postId} (type=${mediaType})`);
             return postId;
         } catch (error) {
-            const detail = error.response?.data ? JSON.stringify(error.response.data) : error.message;
+            const detail = await getNormalizedErrorResponseText(error);
             logger.error(`[Grok Post] Failed to create media post: ${detail}`);
             return null;
         }
@@ -525,7 +488,7 @@ export class GrokApiService {
             }
             return null;
         } catch (error) {
-            const detail = error.response?.data ? JSON.stringify(error.response.data) : error.message;
+            const detail = await getNormalizedErrorResponseText(error);
             logger.warn(`[Grok Video Link] Failed to create share link for ${postId}: ${detail}`);
             return null;
         }
@@ -577,7 +540,7 @@ export class GrokApiService {
         };
 
         const payload = {
-            "temporary": requestBody.temporary !== undefined ? requestBody.temporary : true,
+            "temporary": true,
             "message": message,
             "parentResponseId": requestBody.parentResponseId || undefined,
             "disableSearch": false,
@@ -600,15 +563,15 @@ export class GrokApiService {
             "isAsyncChat": false,
             "disableSelfHarmShortCircuit": false,
             "collectionIds": [],
-            "connectors": [],
-            "searchAllConnectors": false,
+            "disabledConnectorIds": [],
+            "linkQuery": false,
             "deviceEnvInfo": { 
-                "darkModeEnabled": false, 
-                "devicePixelRatio": 1, 
+                "darkModeEnabled": true, 
+                "devicePixelRatio": 1.75, 
                 "screenWidth": 2560, 
                 "screenHeight": 1440, 
-                "viewportWidth": 1116, 
-                "viewportHeight": 1271 
+                "viewportWidth": 899, 
+                "viewportHeight": 726 
             }
         };
 
@@ -1360,8 +1323,8 @@ export class GrokApiService {
 
             for await (const line of rl) {
                 const trimmed = line.trim();
-                if (!trimmed) continue;
-                let dataStr = trimmed.startsWith('data: ') ? trimmed.slice(6).trim() : trimmed;
+                if (!trimmed || trimmed.startsWith(':')) continue;
+                let dataStr = trimmed.startsWith('data:') ? trimmed.slice(5).trim() : trimmed;
                 if (dataStr === '[DONE]') break;
                 try {
                     const json = JSON.parse(dataStr);
@@ -1467,7 +1430,7 @@ export class GrokApiService {
             attachGrokUsageEstimatePayload(doneResult, requestBody);
             yield { result: doneResult };
         } catch (error) {
-            const { status, errorCode, errorMessage, isNetworkError } = this.classifyApiError(error);
+            const { status, errorCode, errorMessage, isNetworkError } = await this.classifyApiError(error, 'stream');
             const canRetryInRequest = !hasYieldedData && retryCount < maxRetries;
 
             // 只有图片生成且未发送过数据时才尝试 WebSocket Fallback (明确排除视频)

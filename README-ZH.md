@@ -4,15 +4,32 @@
 
 # AIClient2API（A2）🚀
 
-**一个能将多种仅客户端内使用的大模型 API（Gemini CLI, Antigravity, Codex, Grok, Kiro ...），模拟请求，统一封装为本地 OpenAI 兼容接口的强大代理。**
+**一个能将多种仅客户端内使用的大模型 API（Antigravity, Codex, Grok, Kiro ...），模拟请求，统一封装为本地 OpenAI 兼容接口的强大代理。**
 
-<a href="https://trendshift.io/repositories/15832" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15832" alt="justlovemaki%2FAIClient-2-API | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 
 <div align="center">
 
-<a href="https://deepwiki.com/justlovemaki/AIClient-2-API"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"  style="width: 134px; height: 23px;margin-bottom: 3px;"></a>
+<table align="center">
+  <thead>
+    <tr>
+      <th align="center">镜像下载量超100k</th>
+      <th align="center">trendshift.io上过榜2</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="center" valign="middle">
+        <img src="https://docker-card.justlikemaki.workers.dev/justlikemaki/aiclient-2-api?layout=compact&theme=github" alt="AIClient2API" style="width: 100%; max-width: 520px; height: 320px;object-fit: contain;" />
+      </td>
+      <td align="center" valign="middle">
+        <a href="https://trendshift.io/repositories/15832" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15832" alt="justlovemaki%2FAIClient-2-API | Trendshift" style="width: 360px; height: 120px;"/></a>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
+[![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/justlovemaki/AIClient-2-API)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Node.js](https://img.shields.io/badge/Node.js-≥20.0.0-green.svg)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/docker-≥20.0.0-blue.svg)](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
@@ -41,16 +58,43 @@
       PackyCode 是一家可靠且高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等模型的中转服务。PackyCode 为本软件用户提供特别优惠：<a href="https://www.packyapi.com/register?aff=AIClient2API">通过此链接注册</a>并在充值时输入 <strong>AIClient2API</strong> 优惠码，即可享受 <strong>10% 的折扣</strong>。
     </td>
   </tr>
+  <!--
   <tr>
     <td width="25%" align="center" valign="middle">
-      <a href="https://visioncoder.com">
+      <a href="https://apikey.fun/register?aff=AIClient2API">
+        <img src="static/apikey.fun.png" alt="APIKEY.FUN Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的其他 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过<a href="https://apikey.fun/register?aff=AIClient2API">本项目专属链接</a>注册，还可享受最高 <strong>充值永久 95 折</strong> 专属优惠。
+    </td>
+  </tr>
+  -->
+  <!--
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://visioncoder.cn">
         <img src="static/visioncoder.png" alt="VisionCoder Sponsor" width="180">
       </a>
     </td>
     <td width="75%" align="left" valign="middle">
-      感谢 VisionCoder 对本项目的支持。VisionCoder 开发平台 是一个可靠高效的 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。VisionCoder 还为我们的用户提供 <a href="https://visioncoder.com">Token Plan</a> 限时活动：<strong>购买 1 个月，赠送 1 个月</strong>。
+      感谢 VisionCoder 对本项目的支持。<a href="https://visioncoder.cn">VisionCoder 开发平台</a> 是一个可靠高效的 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。此外，VisionCoder 还提供 <strong>Claude Max 200 与 GPT Pro 200 高级成品号</strong>的独家售卖渠道，助力体验全网顶配 AI 的算力与体验。
     </td>
   </tr>
+  -->
+  <!-- Atlas Cloud
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://www.atlascloud.ai/console/coding-plan">
+        <img src="static/atlascloud.png" alt="Atlas Cloud Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      感谢 Atlas Cloud 赞助本项目！Atlas Cloud 是一款<strong>全模态 AI 推理平台</strong>，为开发者提供单一的 AI API 以轻松接入视频生成、图像生成和大语言模型 API。无需管理多个供应商集成，您只需连接一次，即可统一访问跨所有模态的 <strong>300 多种精选模型</strong>。欢迎查看 Atlas Cloud 全新的 <a href="https://www.atlascloud.ai/console/coding-plan">编码计划促销活动 (coding plan)</a>，以获取更具性价比的 API 接入服务。
+    </td>
+  </tr>
+  -->
+  <!--
   <tr>
     <td width="25%" align="center" valign="middle">
       <a href="https://www.aicodemirror.com/register?invitecode=5BUE62">
@@ -61,6 +105,7 @@
       感谢 AICodeMirror 赞助本项目！AICodeMirror 为 Claude Code / Codex / Gemini CLI 提供官方高稳定性中转服务，具备企业级并发能力、快速开票和 7/24 专属技术支持。Claude Code / Codex / Gemini 官方渠道价格仅为原价的 38% / 2% / 9%，充值还有额外优惠！AICodeMirror 为 AIClient2API 用户提供专属福利：<a href="https://www.aicodemirror.com/register?invitecode=5BUE62">通过此链接注册</a>即可享受首充 <strong>8折（20% off）</strong> 优惠，企业客户最高可享 75折（25% off）！
     </td>
   </tr>
+  -->
 
 <!--
   <tr>
@@ -86,6 +131,48 @@
     </td>
   </tr>
 -->
+<!-- Fenno.ai and Qiniu Cloud AI
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&aff=2EW65KEQC938">
+        <img src="static/fenno.png" alt="Fenno.ai Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      Fenno.ai 是一家稳定、高效的 API 中转服务商，目前主要提供 Codex 中转服务，兼容 OpenAI 及 Anthropic 协议，可灵活接入 Codex、Claude Code、OpenCode 等主流编程工具，可稳定支撑千亿 Token/日的企业级调用需求，支持国内及海外主体公对公结算、开票。Fenno.ai 为 CC-Connect 的用户提供了专属福利：<a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&aff=2EW65KEQC938">通过此链接</a>即可订阅 <strong>9.9 元/150刀额度</strong>的超值 Coding Plan，邀请好友最高可享 <strong>20% 奖励</strong>，多邀多得！
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://s.qiniu.com/FRF7bq">
+        <img src="static/qiniu.png" alt="七牛云 AI Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      七牛云 AI 是七牛云（02567.HK）旗下<strong>企业级大模型 MaaS 平台</strong>，可一站式调用全球 <strong>150+ 主流模型</strong>，兼容全球主流模型厂商协议，覆盖文本、图像、音频、视频、文件处理等全模态处理能力，服务超过 169 万企业及开发者用户。专属福利：企业用户可<a href="https://s.qiniu.com/FRF7bq">免费领 <strong>1200 万 Token</strong></a>，邀请好友最高得<strong>百亿 Token</strong>。
+    </td>
+  </tr>
+-->
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://vmcardio.com/zh/register?code=OPXPWHXWD5">
+        <img src="static/vmcard.png" alt="VMCard Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      <strong>VMCard｜AI 业务企业级支付卡</strong>，面向 AI 账号商、AI API 服务商及批量订阅业务团队。GPT / Claude 丝滑支付，专属美国 Visa 卡段，支持 API 批量开卡，全网最低结算汇率，满足大批量、长期稳定支付需求。<a href="https://vmcardio.com/zh/register?code=OPXPWHXWD5">通过此链接注册</a>。
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://www.axisnow.io/zh">
+        <img src="static/axisnow.jpg" alt="AxisNow Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      <a href="https://www.axisnow.io/zh">AxisNow</a> 保护并加速网站与 API，兼顾中国大陆及全球的访问体验，并通过客户端 SDK，将加速与安全能力延伸至原生/移动 App — <strong>自建私有部署 CDN｜订阅式高防 CDN｜自主可控、灵活组合的 CDN 网络。</strong>
+    </td>
+  </tr>
   <tr>
     <td width="25%" align="center" valign="middle">
       <img src="static/wechat.png" alt="Sponsor Contact" width="150">
@@ -101,7 +188,7 @@
 
 ## 🚀 项目概览
 
-`AIClient2API` 是一个突破客户端限制的 API 代理服务，将 Gemini、Antigravity、Codex, Grok、Kiro 等原本仅限客户端内使用的免费大模型，转换为可供任何应用调用的标准 OpenAI 兼容接口。基于 Node.js 构建，支持 OpenAI、Claude、Gemini 三大协议的智能互转，让 Cherry-Studio、NextChat、Cline 等工具能够免费大量使用 Claude Opus 4.5、Gemini 3.0 Pro 等高级模型。项目采用策略模式和适配器模式的模块化架构，内置账号池管理、智能轮询、自动故障转移和健康检查机制，确保 99.9% 的服务可用性。
+`AIClient2API` 是一个突破客户端限制的 API 代理服务，将 Gemini、Antigravity、Codex, Grok、Kiro 等原本仅限客户端内使用的免费大模型，转换为可供任何应用调用的标准 OpenAI 兼容接口。基于 Node.js 构建，支持 OpenAI、Claude、Gemini 三大协议的智能互转，让 Cherry-Studio、NextChat、Cline 等工具能够免费大量使用 Claude Opus、Gemini Pro 等高级模型。项目采用策略模式和适配器模式的模块化架构，内置账号池管理、智能轮询、自动故障转移和健康检查机制，确保 99.9% 的服务可用性。
 
 > [!NOTE]
 > **🎉 重要里程碑**
@@ -113,9 +200,10 @@
 > <details>
 > <summary>点击展开查看详细版本历史</summary>
 > 
+> - **2026.06.03** - 新增 Grok Build（Grok CLI）支持：接入 `grok-cli-oauth` 的 xAI OAuth / Responses API 调用链，支持 Grok Build 文本模型、多协议转换、内置工具（网页搜索、X 搜索、代码解释器、集合/附件搜索）以及图片/视频生成模型。
 > - **2026.05.04 (v3.0.0)** - **里程碑更新：AI 深度集成与自发现架构**。新增自动化 Skill 指南与远程 `/api/help`、`/api/example` 接口，支持 AI 代理无缝理解并操作 50+ 个全量 API 端点；实现了 CLI 与 REST API 输出结果的完全统一，增强了结构化 JSON 支持。
 > - **2026.04.29** - 全面支持 OpenAI 标准的图片生成 (`/v1/images/generations`) 与编辑 (`/v1/images/edits`) 接口。支持自动将 OpenAI 格式请求转换为各模型对应的原生生图协议，并适配号池轮询与自动重试机制，大幅提升多模态创作的稳定性。
-> - **2026.03.02** - 新增 Grok 协议支持，支持通过 Cookie/SSO 方式访问 xAI Grok 系列模型（Grok 3/4），支持多模态输入、图片/视频生成、自动 token 刷新及流式输出
+> - **2026.03.02** - 新增 Grok 协议支持，支持通过 Cookie/SSO 方式访问 xAI Grok 系列模型（Grok），支持多模态输入、图片/视频生成、自动 token 刷新及流式输出
 > - **2026.01.26** - 新增 Codex 协议支持：支持 OpenAI Codex OAuth 授权接入
 > - **2026.01.25** - 增强 AI 监控插件：支持监控 AI 协议转换前后的请求参数和响应。优化日志管理：统一日志格式，可视化配置
 > - **2026.01.15** - 优化提供商池管理器：新增异步刷新队列机制、缓冲队列去重、全局并发控制，支持节点预热和自动过期检测
@@ -123,15 +211,15 @@
 > - **2025.12.30** - 添加主进程管理和自动更新功能
 > - **2025.12.25** - 配置文件统一管理：所有配置集中到 `configs/` 目录，Docker 用户需更新挂载路径为 `-v "本地路径:/app/configs"`
 > - **2025.12.11** - Docker 镜像自动构建并发布到 Docker Hub: [justlikemaki/aiclient-2-api](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
-> - **2025.11.30** - 新增 Antigravity 协议支持，支持通过 Google 内部接口访问 Gemini 3 Pro、Claude Sonnet 4.5 等模型
+> - **2025.11.30** - 新增 Antigravity 协议支持，支持通过 Google 内部接口访问 Gemini Pro、Claude Sonnet 等模型
 > - **2025.11.11** - 新增 Web UI 管理控制台，支持实时配置管理和健康状态监控
-> - **2025.11.06** - 新增对 Gemini 3 预览版的支持，增强模型兼容性和性能优化
-> - **2025.10.18** - Kiro 开放注册，新用户赠送 500 额度，已完整支持 Claude Sonnet 4.5
+> - **2025.11.06** - 新增对 Gemini 预览版的支持，增强模型兼容性和性能优化
+> - **2025.10.18** - Kiro 开放注册，新用户赠送 500 额度，已完整支持 Claude Sonnet
 > - **2025.08.29** - 发布账号池管理功能，支持多账号轮询、智能故障转移和自动降级策略
 >   - 配置方式：在 `configs/config.json` 中添加 `PROVIDER_POOLS_FILE_PATH` 参数
 >   - 参考配置：[provider_pools.json](./configs/provider_pools.json.example)
 > - **历史已开发**
->   - 支持 Gemini CLI、Kiro 等客户端2API
+>   - 支持 Gemini 、Kiro 等客户端2API
 >   - OpenAI ,Claude ,Gemini 三协议互转，自动智能切换
 > </details>
 ---
@@ -155,7 +243,7 @@
 >   ```
 
 ### 🎯 统一接入，一站式管理
-*   **多模型统一接口**：通过标准 OpenAI 兼容协议，一次配置即可接入 Gemini、Claude、Grok、Codex、Kimi K2、MiniMax M2 等主流大模型
+*   **多模型统一接口**：通过标准 OpenAI 兼容协议，一次配置即可接入 Gemini、Claude、Grok、Codex、Kimi、MiniMax 等主流大模型
 *   **灵活切换机制**：Path 路由、支持通过启动参数、环境变量三种方式动态切换模型，满足不同场景需求
 *   **零成本迁移**：完全兼容 OpenAI API 规范，Cherry-Studio、NextChat、Cline 等工具无需修改即可使用
 *   **多协议智能转换**：支持 OpenAI、Claude、Gemini 三大协议间的智能转换，实现跨协议模型调用
@@ -163,7 +251,7 @@
 ### 🚀 突破限制，提升效率
 *   **绕过官方限制**：利用 OAuth 授权机制，有效突破 Gemini, Antigravity 等服务的免费 API 速率和配额限制
 *   **TLS 指纹绕过**：内置 TLS Sidecar (Go uTLS) 模拟浏览器特征，有效绕过 Grok 等服务的 Cloudflare 403 封锁
-*   **免费高级模型**：通过 Kiro API 模式免费使用 Claude Opus 4.5，降低使用成本
+*   **免费高级模型**：通过 Kiro API 模式免费使用 Claude Opus，降低使用成本
 *   **账号池智能调度**：支持多账号轮询、自动故障转移和配置降级，确保 99.9% 服务可用性
 
 ### 🛡️ 安全可控，数据透明
@@ -204,14 +292,15 @@
 #### 🐳 Docker 快捷启动 (推荐)
 
 ```bash
-docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19876-19880 --restart=always -v "指定路径:/app/configs" --name aiclient2api justlikemaki/aiclient-2-api
+docker run -d -p 3000:3000 -p 8086:8086 -p 1455:1455 -p 56121:56121 -p 19876-19880:19876-19880 --restart=always -v "指定路径/configs:/app/configs" -v "指定路径/plugins:/app/src/plugins-user" --name aiclient2api justlikemaki/aiclient-2-api
 ```
 
 **参数说明**：
 - `-d`：后台运行容器
-- `-p 3000:3000 ...`：端口映射。3000 为 Web UI，其余为 OAuth 回调端口（Gemini: 8085, Antigravity: 8086, Codex: 1455, Kiro: 19876-19880）
+- `-p 3000:3000 ...`：端口映射。3000 为 Web UI，其余为 OAuth 回调端口（Antigravity: 8086, Codex: 1455, Grok CLI: 56121, Kiro: 19876-19880）
 - `--restart=always`：容器自动重启策略
-- `-v "指定路径:/app/configs"`：挂载配置目录（请将"指定路径"替换为实际路径，如 `/home/user/aiclient-configs`）
+- `-v "指定路径/configs:/app/configs"`：挂载配置目录（请将"指定路径"替换为实际路径，如 `/home/user/aiclient2api`）
+- `-v "指定路径/plugins:/app/src/plugins-user"`：挂载用户插件目录
 - `--name aiclient2api`：容器名称
 
 #### 🐳 Docker Compose 部署
@@ -319,10 +408,10 @@ docker compose up -d
 
 #### 最新模型支持
 无缝支持以下最新大模型，仅需在 Web UI 或 [`configs/config.json`](./configs/config.json) 中配置相应的端点：
-*   **Grok 3 / Grok 4** - xAI 旗舰模型，现已通过 Grok Cookie/SSO 支持，支持思考模型、图片生成及视频生成
-*   **Claude 4.5 Opus** - Anthropic 史上最强模型，现已通过 Kiro, Antigravity 支持
-*   **Gemini 3 Pro** - Google 下一代架构预览版，现已通过 Gemini, Antigravity 支持
-*   **Kimi K2 / MiniMax M2** - 国内顶级旗舰模型同步支持，现已通过自定义OpenAI，Claude 支持
+*   **Grok / Grok Build** - xAI 旗舰模型，现已通过 Grok Cookie/SSO 与 Grok CLI OAuth 支持，支持思考模型、Grok Build、内置工具、图片生成及视频生成
+*   **Claude Opus** - Anthropic 史上最强模型，现已通过 Kiro, Antigravity 支持
+*   **Gemini Pro** - Google 下一代架构预览版，现已通过 Gemini, Antigravity 支持
+*   **Kimi / MiniMax** - 国内顶级旗舰模型同步支持，现已通过自定义OpenAI，Claude 支持
 
 ---
 
@@ -335,15 +424,10 @@ docker compose up -d
 
 #### 🌐 Web UI 快捷授权 (推荐)
 在 Web UI 管理界面中，您可以极速完成授权配置：
-1. **生成授权**：在 **“提供商池”** 页面或**“配置管理”** 页面，点击对应提供商（如 Gemini）右上角的 **“生成授权”** 按钮。
-2. **扫码/登录**：系统将弹出授权对话框，您可以点击 **“在浏览器中打开”** 进行登录验证。对于 Gemini，Antigravity 需完成 Google 账号授权。
+1. **生成授权**：在 **“提供商池”** 页面或**“配置管理”** 页面，点击对应提供商（如 Codex）右上角的 **“生成授权”** 按钮。
+2. **扫码/登录**：系统将弹出授权对话框，您可以点击 **“在浏览器中打开”** 进行登录验证。Antigravity 需完成 Google 账号授权。
 3. **自动保存**：授权成功后，系统会自动获取凭据并保存至 `configs/` 对应目录下，您可以在 **“配置文件”** 页面看到新生成的凭据。
 4. **可视化管理**：您可以随时在 Web UI 中上传、删除凭据，或通过 **“快速关联”** 功能将已有的凭据文件一键绑定到提供商。
-
-#### Gemini CLI OAuth 配置
-1. **获取OAuth凭据**：访问 [Google Cloud Console](https://console.cloud.google.com/) 创建项目，启用Gemini API
-2. **项目配置**：可能需要提供有效的Google Cloud项目ID，可通过启动参数 `--project-id` 指定
-3. **确保项目ID**：在 Web UI 中配置时，确保输入的项目ID与 Google Cloud Console 和 Gemini CLI 中显示的项目ID一致。
 
 #### Antigravity OAuth 配置
 1. **个人账号**：个人账号需要单独授权，已关闭申请渠道。
@@ -402,11 +486,17 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
 3. **自动保存**：授权成功后，系统会自动保存 Codex 的 OAuth 凭据文件
 4. **回调端口**：确保 OAuth 回调端口 `1455` 未被占用
 
+#### Grok CLI OAuth 配置
+1. **生成授权**：在 Web UI 的“提供商池”或“配置管理”页面，点击 Grok CLI 的“生成授权”按钮
+2. **浏览器登录**：系统将打开 xAI 授权页面，完成 OAuth 登录
+3. **自动保存**：授权成功后，系统会自动保存 Grok CLI OAuth 凭据文件到 `configs/grok-cli/`
+4. **回调端口**：确保 OAuth 回调端口 `56121` 未被占用
+
 #### Grok Cookie/SSO 配置
 1. **获取 SSO 令牌**：登录 [Grok 官网](https://grok.com/)，在浏览器开发者工具的 Application -> Cookies 中复制 `sso` 的值
 2. **填入配置**：在 Web UI 的“配置管理”或直接修改配置文件，将令牌填入 `GROK_COOKIE_TOKEN`
 3. **支持功能**：
-   - 聊天与思考模型（Grok 3 Thinking）
+   - 聊天与思考模型（Grok Thinking）
    - 图片生成（Grok Imagine）
    - 视频生成（Grok Video）
 4. **注意事项**：确保 `GROK_USER_AGENT` 与您获取 Cookie 时使用的浏览器一致以避免被拦截
@@ -428,10 +518,10 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
 
 | 服务 | 默认路径 | 说明 |
 |------|---------|------|
-| **Gemini** | `~/.gemini/oauth_creds.json` | OAuth 认证凭据 |
 | **Kiro** | `~/.aws/sso/cache/kiro-auth-token.json` | Kiro 认证令牌 |
-| **Antigravity** | `~/.antigravity/oauth_creds.json` | Antigravity OAuth 凭据 (支持 Claude 4.5 Opus) |
+| **Antigravity** | `~/.antigravity/oauth_creds.json` | Antigravity OAuth 凭据 (支持 Claude Opus) |
 | **Codex** | `~/.codex/oauth_creds.json` | Codex OAuth 凭据 |
+| **Grok CLI** | `configs/grok-cli/..._xai-..._oauth_creds.json` | Grok CLI OAuth 凭据 |
 
 > **说明**：`~` 表示用户主目录（Windows: `C:\Users\用户名`，Linux/macOS: `/home/用户名` 或 `/Users/用户名`）
 
@@ -467,7 +557,6 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
    {
      "PROXY_URL": "http://127.0.0.1:7890",
       "PROXY_ENABLED_PROVIDERS": [
-        "gemini-cli-oauth",
         "gemini-antigravity",
         "claude-kiro-oauth",
         "grok-web"
@@ -483,7 +572,7 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
    ```json
    {
      "OPENAI_BASE_URL": "https://your-proxy-endpoint.com/v1",
-     "CLAUDE_BASE_URL": "https://your-proxy-endpoint.com"
+     "CLAUDE_BASE_URL": "https://your-proxy-endpoint.com/v1"
    }
    ```
 
@@ -510,7 +599,7 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
 
 ```json
 {
-  "gemini-cli-oauth": [
+  "gemini-antigravity": [
     {
       "uuid": "provider-1",
       "notSupportedModels": ["gemini-3.0-pro", "gemini-3.5-flash"],
@@ -530,15 +619,13 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
 
 #### 3. 跨类型 Fallback 配置
 
-当某一 Provider Type（如 `gemini-cli-oauth`）下的所有账号都因 429 配额耗尽或被标记为 unhealthy 时，系统能够自动 fallback 到另一个兼容的 Provider Type（如 `gemini-antigravity`），而不是直接返回错误。
+当某一 Provider Type（如 `claude-kiro-oauth`）下的所有账号都因 429 配额耗尽或被标记为 unhealthy 时，系统能够自动 fallback 到另一个兼容的 Provider Type（如 `claude-custom`），而不是直接返回错误。
 
 **配置方式**：在 `configs/config.json` 中添加 `providerFallbackChain` 配置：
 
 ```json
 {
   "providerFallbackChain": {
-    "gemini-cli-oauth": ["gemini-antigravity"],
-    "gemini-antigravity": ["gemini-cli-oauth"],
     "claude-kiro-oauth": ["claude-custom"],
     "claude-custom": ["claude-kiro-oauth"]
   }
@@ -551,7 +638,7 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
    - 查找配置的 fallback 类型
    - 检查 fallback 类型是否支持当前请求的模型（协议兼容性检查）
    - 从 fallback 类型的池中选取 healthy 账号
-3. 支持多级降级链：`gemini-cli-oauth → gemini-antigravity → openai-custom`
+3. 支持多级降级链：`claude-kiro-oauth → claude-custom → openai-custom`
 4. 如果所有 fallback 类型也不可用，才返回错误
 
 **使用场景**：
@@ -609,7 +696,7 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
 
 **解决方案**：
 - **检查网络连接**：确保能够正常访问 Google、阿里云等服务
-- **检查端口占用**：OAuth 回调需要特定端口（Gemini: 8085, Antigravity: 8086, Codex: 1455, Kiro: 19876-19880），确保这些端口未被占用
+- **检查端口占用**：OAuth 回调需要特定端口（Antigravity: 8086, Codex: 1455, Grok CLI: 56121, Kiro: 19876-19880），确保这些端口未被占用
 - **清除浏览器缓存**：尝试使用无痕模式或清除浏览器缓存后重试
 - **检查防火墙设置**：确保防火墙允许本地回调端口的访问
 - **Docker 用户**：确保已正确映射所有 OAuth 回调端口
@@ -691,6 +778,29 @@ kill -9 <PID>
 - **增加超时时间**：在客户端配置中增加请求超时时间
 - **检查代理设置**：如使用代理，确保代理支持长连接
 - **查看服务日志**：检查是否有错误信息
+
+**上游空响应自动重试**（目前 Kiro `claude-kiro-oauth` 在用，机制本身与 provider 无关）：
+
+在 Kiro 反代场景下，上游偶尔会返回 HTTP 200 但内容完全为空（没有文本、没有工具调用、也没有思考内容，`output_tokens: 0`）。这类空回如果直接放行给客户端，Claude Code 等客户端会认为"没有任何动作"，进而自行追加一条"请继续"之类的消息，导致对话历史（以及 `input_tokens`）不断累积膨胀，形成恶性循环。
+
+本项目针对这种情况内置了检测与重试机制：
+
+- 检测到上游返回真正的空响应时，不再伪造一次成功的 `end_turn`，而是在代理内部**用同一份请求体**（历史不会变大）直接重试，最多重试 `EMPTY_RESPONSE_MAX_RETRIES` 次（默认 `2`），每次重试前等待 `EMPTY_RESPONSE_RETRY_DELAY_MS` 毫秒（默认 `500`）。
+- 该重试预算与凭证切换重试次数（`CREDENTIAL_SWITCH_MAX_RETRIES`）**互相独立、分开计数**，不会因为一次空回就把凭证切换的重试预算提前耗光，也不会因为切换凭证重试而额外增加本次请求的历史/token 开销。
+- 正常有内容的响应不受影响：只要上游返回过任意文本、工具调用或思考内容中的一种，就不会触发重试逻辑，流式响应的首字延迟基本不变。
+- 重试次数用尽后，会向客户端返回明确的错误信息（而不是静默的空 `end_turn`），可以在日志中搜索 `empty response` 或 `isEmptyUpstreamResponse` 相关关键字确认是否命中过该问题，以及命中频率。
+- 该机制不绑定具体 provider：任何 provider 只要在检测到空响应时抛出带 `isEmptyUpstreamResponse` 标记的错误，就会自动复用这套重试逻辑。
+
+可在 `configs/config.json` 中调整：
+
+```json
+{
+  "EMPTY_RESPONSE_MAX_RETRIES": 2,
+  "EMPTY_RESPONSE_RETRY_DELAY_MS": 500
+}
+```
+
+> 注意：这只解决"上游静默返回空内容"这一类中断（本文档称为 A 类）。如果模型只是用文字描述了接下来要做什么但没有真正调用工具（B 类，`stop_reason: end_turn` 且 `output_tokens > 0`），属于模型/提示词层面的行为，代理无法自动判断并重试，建议通过 `/clear` 清空会话历史或在提示词中更明确地要求模型直接执行工具调用来缓解。
 
 ### 9. 配置修改不生效
 
@@ -775,18 +885,11 @@ OAuth 令牌（如 Gemini, Antigravity, Codex）通常有一定的有效期（�
 本项目遵循 [**GNU General Public License v3 (GPLv3)**](https://www.gnu.org/licenses/gpl-3.0) 开源许可。详情请查看根目录下的 `LICENSE` 文件。
 ## 🙏 致谢
 
-本项目的开发受到了官方 Google Gemini CLI 的极大启发，并参考了Cline 3.18.0 版本 `gemini-cli.ts` 的部分代码实现。在此对 Google 官方团队和 Cline 开发团队的卓越工作表示衷心的感谢！
 ### 贡献者列表
 
 感谢以下所有为 AIClient2API 项目做出贡献的开发者：
 
 [![Contributors](https://contrib.rocks/image?repo=justlovemaki/AIClient-2-API)](https://github.com/justlovemaki/AIClient-2-API/graphs/contributors)
-
-
-### 🌟 Star History
-
-
-[![Star History Chart](https://api.star-history.com/svg?repos=justlovemaki/AIClient-2-API&type=Timeline)](https://www.star-history.com/#justlovemaki/AIClient-2-API&Timeline)
 
 ---
 

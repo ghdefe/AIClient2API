@@ -8,16 +8,23 @@ import {
     handleKiroOAuth,
     handleIFlowOAuth,
     handleCodexOAuth,
+    handleGrokCliOAuth,
     batchImportCodexTokensStream,
+    batchImportGrokCliTokensStream,
     batchImportKiroRefreshTokensStream,
     importAwsCredentials,
     batchImportGrokTokensStream
 } from '../auth/oauth-handlers.js';
+import { normalizeCodexExternalCredentials } from '../auth/codex-import-normalizer.js';
+
+const CODEX_EXTERNAL_IMPORT_BODY_LIMIT_BYTES = 5 * 1024 * 1024;
+const CODEX_EXTERNAL_IMPORT_MAX_ITEMS = 1000;
 
 /**
  * 生成 OAuth 授权 URL
  */
 export async function handleGenerateAuthUrl(req, res, currentConfig, providerType) {
+    logger.info(`[UI API] Received request to generate auth URL for ${providerType}`);
     try {
         let authUrl = '';
         let authInfo = {};
@@ -26,8 +33,9 @@ export async function handleGenerateAuthUrl(req, res, currentConfig, providerTyp
         let options = {};
         try {
             options = await getRequestBody(req);
+            logger.debug(`[UI API] Parsed options for ${providerType}:`, JSON.stringify(options));
         } catch (e) {
-            // 如果没有请求体，使用默认空对象
+            logger.warn(`[UI API] Failed to parse request body for ${providerType}, using empty options`);
         }
 
         // 根据提供商类型生成授权链接并启动回调服务器
@@ -57,6 +65,11 @@ export async function handleGenerateAuthUrl(req, res, currentConfig, providerTyp
         } else if (providerType === 'openai-codex-oauth') {
             // Codex OAuth（OAuth2 + PKCE）
             const result = await handleCodexOAuth(currentConfig, options);
+            authUrl = result.authUrl;
+            authInfo = result.authInfo;
+        } else if (providerType === 'grok-cli-oauth') {
+            // Grok CLI OAuth（xAI OAuth2 + PKCE）
+            const result = await handleGrokCliOAuth(currentConfig, options);
             authUrl = result.authUrl;
             authInfo = result.authInfo;
         } else {
@@ -134,6 +147,16 @@ export async function handleManualOAuthCallback(req, res) {
             return true;
         }
 
+        // 特殊处理 Grok CLI OAuth 回调
+        if (provider === 'grok-cli-oauth' && code && state) {
+            const { handleGrokCliOAuthCallback } = await import('../auth/oauth-handlers.js');
+            const result = await handleGrokCliOAuthCallback(code, state);
+
+            res.writeHead(result.success ? 200 : 500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+            return true;
+        }
+
         // 通过fetch请求本地OAuth回调服务器处理
         // 使用localhost而不是原始hostname，确保请求到达本地服务器
         const localUrl = new URL(callbackUrl);
@@ -141,6 +164,7 @@ export async function handleManualOAuthCallback(req, res) {
         localUrl.protocol = 'http:';
 
         try {
+            console.log(`[OAuth Manual Callback] Sending request to local server: ${localUrl.href}`);
             const response = await fetch(localUrl.href);
 
             if (response.ok) {
@@ -415,6 +439,174 @@ export async function handleBatchImportCodexTokens(req, res) {
             res.end();
         } else {
             res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: error.message
+            }));
+        }
+        return true;
+    }
+}
+
+/**
+ * 批量导入 Grok CLI OAuth Token（带实时进度 SSE）
+ */
+export async function handleBatchImportGrokCliTokens(req, res) {
+    try {
+        const body = await getRequestBody(req);
+        const { tokens, skipDuplicateCheck } = body;
+
+        if (!tokens || !Array.isArray(tokens) || tokens.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: 'tokens array is required and must not be empty'
+            }));
+            return true;
+        }
+
+        logger.info(`[Grok CLI Batch Import] Starting batch import with ${tokens.length} tokens...`);
+
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        });
+
+        const sendSSE = (event, data) => {
+            res.write(`event: ${event}\n`);
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        };
+
+        sendSSE('start', { total: tokens.length });
+
+        const result = await batchImportGrokCliTokensStream(
+            tokens,
+            (progress) => {
+                sendSSE('progress', progress);
+            },
+            !!skipDuplicateCheck
+        );
+
+        logger.info(`[Grok CLI Batch Import] Completed: ${result.success} success, ${result.failed} failed`);
+
+        sendSSE('complete', {
+            success: true,
+            total: result.total,
+            successCount: result.success,
+            failedCount: result.failed,
+            details: result.details
+        });
+
+        res.end();
+        return true;
+    } catch (error) {
+        logger.error('[Grok CLI Batch Import] Error:', error);
+        if (res.headersSent) {
+            res.write(`event: error\n`);
+            res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+            res.end();
+        } else {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: error.message
+            }));
+        }
+        return true;
+    }
+}
+
+/**
+ * 导入 Codex 外部凭据格式（CPA / sub2api，带实时进度 SSE）
+ */
+export async function handleImportCodexExternalCredentials(req, res) {
+    try {
+        const body = await getRequestBody(req, { maxBytes: CODEX_EXTERNAL_IMPORT_BODY_LIMIT_BYTES });
+        const { source, payload, skipDuplicateCheck } = body;
+
+        if (!['cpa', 'sub2api'].includes(source) || payload === undefined) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: 'source must be cpa or sub2api, and payload is required'
+            }));
+            return true;
+        }
+
+        const tokens = normalizeCodexExternalCredentials(source, payload);
+        if (!Array.isArray(tokens) || tokens.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: 'No credentials found in payload'
+            }));
+            return true;
+        }
+
+        if (tokens.length > CODEX_EXTERNAL_IMPORT_MAX_ITEMS) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: false,
+                error: `Too many credentials. Maximum is ${CODEX_EXTERNAL_IMPORT_MAX_ITEMS}`
+            }));
+            return true;
+        }
+
+        logger.info(`[Codex External Import] Starting ${source} import with ${tokens.length} item(s)...`);
+
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        });
+
+        const sendSSE = (event, data) => {
+            res.write(`event: ${event}\n`);
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        };
+
+        sendSSE('start', {
+            source,
+            total: tokens.length,
+            accessTokenOnlyCount: tokens.filter(token => token.access_token_only).length
+        });
+
+        const result = await batchImportCodexTokensStream(
+            tokens,
+            (progress) => {
+                sendSSE('progress', {
+                    ...progress,
+                    source
+                });
+            },
+            !!skipDuplicateCheck
+        );
+
+        logger.info(`[Codex External Import] Completed ${source}: ${result.success} success, ${result.failed} failed`);
+
+        sendSSE('complete', {
+            success: true,
+            source,
+            total: result.total,
+            successCount: result.success,
+            failedCount: result.failed,
+            accessTokenOnlyCount: tokens.filter(token => token.access_token_only).length,
+            details: result.details
+        });
+
+        res.end();
+        return true;
+    } catch (error) {
+        logger.error('[Codex External Import] Error:', error);
+        if (res.headersSent) {
+            res.write(`event: error\n`);
+            res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+            res.end();
+        } else {
+            res.writeHead(error.statusCode || 500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 success: false,
                 error: error.message

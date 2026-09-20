@@ -33,8 +33,19 @@ import {
     generateOutputTextDone,
     generateContentPartDone,
     generateOutputItemDone,
-    generateResponseCompleted
+    generateOutputTextDelta,
+    generateResponseCompleted,
+    streamStateManager
 } from '../../providers/openai/openai-responses-core.mjs';
+
+/**
+ * 清洗 tool_use/functionCall ID，只保留 [a-zA-Z0-9_-] 字符
+ * Claude API 要求 tool_use.id 匹配 ^[a-zA-Z0-9_-]+$
+ */
+function sanitizeToolId(id) {
+    if (!id) return id;
+    return String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
+}
 
 /**
  * OpenAI转换器类
@@ -45,12 +56,13 @@ export class OpenAIConverter extends BaseConverter {
         super('openai');
         // 创建 CodexConverter 实例用于委托
         this.codexConverter = new CodexConverter();
+        this.openAIResponsesStreamStates = new Map();
     }
 
     /**
      * 转换请求
      */
-    convertRequest(data, targetProtocol) {
+    convertRequest(data, targetProtocol, requestId) {
         switch (targetProtocol) {
             case MODEL_PROTOCOL_PREFIX.CLAUDE:
                 return this.toClaudeRequest(data);
@@ -59,7 +71,7 @@ export class OpenAIConverter extends BaseConverter {
             case MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES:
                 return this.toOpenAIResponsesRequest(data);
             case MODEL_PROTOCOL_PREFIX.CODEX:
-                return this.toCodexRequest(data);
+                return this.toCodexRequest(data, requestId);
             case MODEL_PROTOCOL_PREFIX.GROK:
                 return this.toGrokRequest(data);
             default:
@@ -70,7 +82,7 @@ export class OpenAIConverter extends BaseConverter {
     /**
      * 转换响应
      */
-    convertResponse(data, targetProtocol, model) {
+    convertResponse(data, targetProtocol, model, requestId) {
         // OpenAI作为源格式时，通常不需要转换响应
         // 因为其他协议会转换到OpenAI格式
         switch (targetProtocol) {
@@ -88,16 +100,25 @@ export class OpenAIConverter extends BaseConverter {
     }
 
     /**
+     * OpenAI → Codex 请求转换
+     */
+    toCodexRequest(data, requestId) {
+        return this.codexConverter.toOpenAIRequestToCodexRequest(data, requestId);
+    }
+
+    /**
      * 转换流式响应块
      */
-    convertStreamChunk(chunk, targetProtocol, model) {
+    convertStreamChunk(chunk, targetProtocol, model, requestId) {
         switch (targetProtocol) {
             case MODEL_PROTOCOL_PREFIX.CLAUDE:
                 return this.toClaudeStreamChunk(chunk, model);
             case MODEL_PROTOCOL_PREFIX.GEMINI:
                 return this.toGeminiStreamChunk(chunk, model);
             case MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES:
-                return this.toOpenAIResponsesStreamChunk(chunk, model);
+                return this.toOpenAIResponsesStreamChunk(chunk, model, requestId);
+            case MODEL_PROTOCOL_PREFIX.CODEX:
+                return this.codexConverter.toOpenAIStreamChunk(chunk, model, requestId);
             case MODEL_PROTOCOL_PREFIX.GROK:
                 return this.toGrokStreamChunk(chunk, model);
             default:
@@ -662,13 +683,13 @@ export class OpenAIConverter extends BaseConverter {
         const messages = openaiRequest.messages || [];
         const model = openaiRequest.model || '';
         
-        // 构建 tool_call_id -> function_name 映射
+        // 构建 tool_call_id -> function_name 映射（ID 统一清洗，与后续查找保持一致）
         const tcID2Name = {};
         for (const message of messages) {
             if (message.role === 'assistant' && message.tool_calls) {
                 for (const tc of message.tool_calls) {
                     if (tc.type === 'function' && tc.id && tc.function?.name) {
-                        tcID2Name[tc.id] = tc.function.name;
+                        tcID2Name[sanitizeToolId(tc.id)] = tc.function.name;
                     }
                 }
             }
@@ -676,29 +697,31 @@ export class OpenAIConverter extends BaseConverter {
             if (message.role === 'assistant' && Array.isArray(message.content)) {
                 for (const item of message.content) {
                     if (item && item.type === 'tool_use' && item.id && item.name) {
-                        tcID2Name[item.id] = item.name;
+                        tcID2Name[sanitizeToolId(item.id)] = item.name;
                     }
                 }
             }
         }
 
-        // 构建 tool_call_id -> response 映射
+        // 构建 tool_call_id -> response 映射（ID 统一清洗，与后续查找保持一致）
         const toolResponses = {};
         for (const message of messages) {
             if (message.role === 'tool' && message.tool_call_id) {
-                toolResponses[message.tool_call_id] = message.content;
+                toolResponses[sanitizeToolId(message.tool_call_id)] = message.content;
             }
             // Claude 格式：user content 数组中的 tool_result
             if (message.role === 'user' && Array.isArray(message.content)) {
                 for (const item of message.content) {
                     if (item && item.type === 'tool_result' && item.tool_use_id) {
-                        toolResponses[item.tool_use_id] = item.content;
+                        toolResponses[sanitizeToolId(item.tool_use_id)] = item.content;
                     }
                 }
             }
         }
 
         const processedMessages = [];
+        // [FIX] 跟踪已生成的 functionResponse ID，防止重复（Claude API 要求每个 tool_use 只有一个 tool_result）
+        const emittedToolResultIds = new Set();
         let systemInstruction = null;
 
         for (let i = 0; i < messages.length; i++) {
@@ -842,6 +865,33 @@ export class OpenAIConverter extends BaseConverter {
                                     }
                                 }
                                 break;
+                            // [FIX] 处理嵌入在 user 消息中的 Claude 格式 tool_result 块（去重）
+                            case 'tool_result': {
+                                const trId = sanitizeToolId(item.tool_use_id) || `tool_result_${uuidv4().replace(/-/g, '')}`;
+                                if (!emittedToolResultIds.has(trId)) {
+                                    emittedToolResultIds.add(trId);
+                                    const trName = tcID2Name[trId] || trId;
+                                    let trContent = item.content;
+                                    if (Array.isArray(trContent)) {
+                                        trContent = trContent
+                                            .filter(c => c && c.type === 'text')
+                                            .map(c => c.text)
+                                            .join('\n') || JSON.stringify(trContent);
+                                    } else if (typeof trContent !== 'string') {
+                                        trContent = JSON.stringify(trContent);
+                                    }
+                                    node.parts.push({
+                                        functionResponse: {
+                                            name: trName,
+                                            id: trId,
+                                            response: {
+                                                result: trContent
+                                            }
+                                        }
+                                    });
+                                }
+                                break;
+                            }
                         }
                     }
                 }
@@ -863,17 +913,20 @@ export class OpenAIConverter extends BaseConverter {
                             node.parts.push({ text: item.text });
                         } else if (item.type === 'tool_use') {
                             // Claude 格式 tool_use -> Gemini functionCall
-                            const fid = item.id || '';
+                            // [FIX] 当 id 缺失时自动生成，确保 Antigravity 转 Claude 时 tool_use.id 不为空
+                            const fid = sanitizeToolId(item.id) || `toolu_${uuidv4().replace(/-/g, '')}`;
                             const fname = item.name || '';
                             const argsObj = typeof item.input === 'string' ? (() => { try { return JSON.parse(item.input); } catch(e) { return {}; } })() : (item.input || {});
+                            const fc = {
+                                name: fname,
+                                args: argsObj,
+                                id: fid
+                            };
                             node.parts.push({
-                                functionCall: {
-                                    name: fname,
-                                    args: argsObj
-                                },
+                                functionCall: fc,
                                 thoughtSignature: OpenAIConverter.GEMINI_OPENAI_THOUGHT_SIGNATURE
                             });
-                            if (fid) functionCallIds.push(fid);
+                            functionCallIds.push(fid);
                         } else if (item.type === 'image_url' && item.image_url) {
                             const imageUrl = typeof item.image_url === 'string'
                                 ? item.image_url
@@ -904,7 +957,8 @@ export class OpenAIConverter extends BaseConverter {
                 if (message.tool_calls && Array.isArray(message.tool_calls)) {
                     for (const tc of message.tool_calls) {
                         if (tc.type !== 'function') continue;
-                        const fid = tc.id || '';
+                        // [FIX] 当 id 缺失时自动生成，确保 Antigravity 转 Claude 时 tool_use.id 不为空
+                        const fid = sanitizeToolId(tc.id) || `call_${uuidv4().replace(/-/g, '')}`;
                         const fname = tc.function?.name || '';
                         const fargs = tc.function?.arguments || '{}';
 
@@ -918,14 +972,13 @@ export class OpenAIConverter extends BaseConverter {
                         node.parts.push({
                             functionCall: {
                                 name: fname,
-                                args: argsObj
+                                args: argsObj,
+                                id: fid
                             },
                             thoughtSignature: OpenAIConverter.GEMINI_OPENAI_THOUGHT_SIGNATURE
                         });
 
-                        if (fid) {
-                            functionCallIds.push(fid);
-                        }
+                        functionCallIds.push(fid);
                     }
                 }
 
@@ -934,10 +987,11 @@ export class OpenAIConverter extends BaseConverter {
                     processedMessages.push(node);
                 }
 
-                // 添加对应的 functionResponse（作为 user 消息）
+                // 添加对应的 functionResponse（作为 user 消息，去重）
                 if (functionCallIds.length > 0) {
                     const toolNode = { role: 'user', parts: [] };
                     for (const fid of functionCallIds) {
+                        if (emittedToolResultIds.has(fid)) continue; // [FIX] 去重
                         const name = tcID2Name[fid];
                         if (name) {
                             let resp = toolResponses[fid] || '{}';
@@ -947,11 +1001,13 @@ export class OpenAIConverter extends BaseConverter {
                             toolNode.parts.push({
                                 functionResponse: {
                                     name: name,
+                                    id: fid,
                                     response: {
                                         result: resp
                                     }
                                 }
                             });
+                            emittedToolResultIds.add(fid);
                         }
                     }
                     if (toolNode.parts.length > 0) {
@@ -961,13 +1017,13 @@ export class OpenAIConverter extends BaseConverter {
             } else if (role === 'tool') {
                 // 处理独立的 tool role 消息（OpenAI 格式）
                 // 转换为 Gemini 的 functionResponse 格式
-                const toolNode = { role: 'user', parts: [] };
-                
-                // 从 tool_call_id 查找对应的函数名
-                const toolCallId = message.tool_call_id;
-                const functionName = tcID2Name[toolCallId];
-                
-                if (functionName) {
+                // [FIX] 去重：跳过已由 assistant 自动配对生成的 functionResponse
+                const toolCallId = sanitizeToolId(message.tool_call_id) || `tool_result_${uuidv4().replace(/-/g, '')}`;
+                if (!emittedToolResultIds.has(toolCallId)) {
+                    emittedToolResultIds.add(toolCallId);
+                    const toolNode = { role: 'user', parts: [] };
+                    const functionName = tcID2Name[toolCallId] || toolCallId;
+                    
                     let responseContent = message.content;
                     if (typeof responseContent !== 'string') {
                         responseContent = JSON.stringify(responseContent);
@@ -976,6 +1032,7 @@ export class OpenAIConverter extends BaseConverter {
                     toolNode.parts.push({
                         functionResponse: {
                             name: functionName,
+                            id: toolCallId,
                             response: {
                                 result: responseContent
                             }
@@ -1510,6 +1567,20 @@ export class OpenAIConverter extends BaseConverter {
         return this.codexConverter.toOpenAIRequestToCodexRequest(openaiRequest);
     }
 
+    _mapOpenAIToolChoiceToResponses(toolChoice) {
+        if (!toolChoice) {
+            return undefined;
+        }
+        if (typeof toolChoice === 'string') {
+            return toolChoice;
+        }
+        if (toolChoice.type === 'function') {
+            const name = toolChoice.name || toolChoice.function?.name;
+            return name ? { type: 'function', name } : undefined;
+        }
+        return toolChoice;
+    }
+
     /**
      * 将OpenAI请求转换为OpenAI Responses格式
      */
@@ -1522,8 +1593,7 @@ export class OpenAIConverter extends BaseConverter {
             max_output_tokens: openaiRequest.max_tokens,
             temperature: openaiRequest.temperature,
             top_p: openaiRequest.top_p,
-            parallel_tool_calls: openaiRequest.parallel_tool_calls,
-            tool_choice: openaiRequest.tool_choice
+            parallel_tool_calls: openaiRequest.parallel_tool_calls
         };
 
         const { systemInstruction, nonSystemMessages } = extractSystemMessages(openaiRequest.messages || []);
@@ -1598,16 +1668,202 @@ export class OpenAIConverter extends BaseConverter {
             }));
         }
 
+        const toolChoice = this._mapOpenAIToolChoiceToResponses(openaiRequest.tool_choice);
+        if (toolChoice !== undefined) {
+            responsesRequest.tool_choice = toolChoice;
+        }
+
         return responsesRequest;
     }
 
     /**
      * 将OpenAI响应转换为OpenAI Responses格式
      */
+    _buildResponsesMessageItemId(responseId, index = 0) {
+        return responseId ? `msg_${responseId}_${index}` : `msg_${uuidv4().replace(/-/g, '')}`;
+    }
+
+    _buildResponsesFunctionItemId(callId) {
+        return callId ? `fc_${callId}` : `fc_${uuidv4().replace(/-/g, '')}`;
+    }
+
+    _buildResponsesReasoningItemId(responseId, index = 0) {
+        return responseId ? `rs_${responseId}_${index}` : `rs_${uuidv4().replace(/-/g, '')}`;
+    }
+
+    _buildResponsesUsageFromOpenAIUsage(usage) {
+        return usage ? {
+            input_tokens: usage.prompt_tokens || 0,
+            input_tokens_details: {
+                cached_tokens: usage.prompt_tokens_details?.cached_tokens || 0
+            },
+            output_tokens: usage.completion_tokens || 0,
+            output_tokens_details: {
+                reasoning_tokens: usage.completion_tokens_details?.reasoning_tokens || 0
+            },
+            total_tokens: usage.total_tokens || 0
+        } : {
+            input_tokens: 0,
+            input_tokens_details: {
+                cached_tokens: 0
+            },
+            output_tokens: 0,
+            output_tokens_details: {
+                reasoning_tokens: 0
+            },
+            total_tokens: 0
+        };
+    }
+
+    _getOpenAIResponsesStreamState(openaiChunk, model, requestId) {
+        const stateKey = requestId || openaiChunk?.id || 'default';
+        if (!this.openAIResponsesStreamStates.has(stateKey)) {
+            const responseId = openaiChunk?.id || `resp_${uuidv4().replace(/-/g, '')}`;
+            this.openAIResponsesStreamStates.set(stateKey, {
+                responseId,
+                msgId: this._buildResponsesMessageItemId(responseId, 0),
+                model: model || openaiChunk?.model || 'unknown',
+                createdAt: openaiChunk?.created || Math.floor(Date.now() / 1000),
+                started: false,
+                textStarted: false,
+                reasoningStarted: false,
+                reasoningId: null,
+                reasoningText: '',
+                toolCalls: new Map()
+            });
+        }
+
+        const state = this.openAIResponsesStreamStates.get(stateKey);
+        if (openaiChunk?.id && state.responseId !== openaiChunk.id) {
+            state.responseId = openaiChunk.id;
+            state.msgId = this._buildResponsesMessageItemId(state.responseId, 0);
+        }
+        if (model || openaiChunk?.model) {
+            state.model = model || openaiChunk.model;
+        }
+        if (openaiChunk?.created) {
+            state.createdAt = openaiChunk.created;
+        }
+
+        const coreState = streamStateManager.getOrCreateState(stateKey);
+        coreState.id = state.responseId;
+        coreState.msgId = state.msgId;
+        coreState.model = state.model;
+        coreState.startTime = state.createdAt;
+        if (!state.started) {
+            coreState.fullText = '';
+            coreState.toolCalls = [];
+            coreState.currentToolCall = null;
+            coreState.status = 'in_progress';
+        }
+
+        return { stateKey, state };
+    }
+
+    _ensureOpenAIResponsesStreamStarted(stateKey, state, events) {
+        if (state.started) {
+            return;
+        }
+        events.push(
+            generateResponseCreated(stateKey, state.model),
+            generateResponseInProgress(stateKey)
+        );
+        state.started = true;
+    }
+
+    _ensureOpenAIResponsesTextStarted(stateKey, state, events) {
+        this._ensureOpenAIResponsesStreamStarted(stateKey, state, events);
+        if (state.textStarted) {
+            return;
+        }
+        events.push(
+            generateOutputItemAdded(stateKey),
+            generateContentPartAdded(stateKey)
+        );
+        state.textStarted = true;
+    }
+
+    _getOpenAIResponsesToolState(state, toolCall) {
+        const index = toolCall.index ?? 0;
+        const key = String(index);
+        if (!state.toolCalls.has(key)) {
+            const callId = toolCall.id || `call_${state.responseId}_${index}`;
+            state.toolCalls.set(key, {
+                outputIndex: index,
+                callId,
+                itemId: this._buildResponsesFunctionItemId(callId),
+                name: toolCall.function?.name || '',
+                arguments: '',
+                added: false,
+                done: false
+            });
+        }
+        const toolState = state.toolCalls.get(key);
+        if (toolCall.id && toolState.callId !== toolCall.id) {
+            toolState.callId = toolCall.id;
+            toolState.itemId = this._buildResponsesFunctionItemId(toolCall.id);
+        }
+        if (toolCall.function?.name) {
+            toolState.name = toolCall.function.name;
+        }
+        return toolState;
+    }
+
+    _emitOpenAIResponsesToolStart(toolState, events) {
+        if (toolState.added) {
+            return;
+        }
+        events.push({
+            item: {
+                id: toolState.itemId,
+                call_id: toolState.callId,
+                type: "function_call",
+                name: toolState.name,
+                arguments: "",
+                status: "in_progress"
+            },
+            output_index: toolState.outputIndex,
+            sequence_number: 2,
+            type: "response.output_item.added"
+        });
+        toolState.added = true;
+    }
+
+    _finalizeOpenAIResponsesToolCalls(state, events) {
+        for (const toolState of state.toolCalls.values()) {
+            if (!toolState.added) {
+                this._emitOpenAIResponsesToolStart(toolState, events);
+            }
+            if (toolState.done) {
+                continue;
+            }
+            events.push({
+                type: "response.function_call_arguments.done",
+                item_id: toolState.itemId,
+                output_index: toolState.outputIndex,
+                arguments: toolState.arguments
+            });
+            events.push({
+                type: "response.output_item.done",
+                output_index: toolState.outputIndex,
+                item: {
+                    id: toolState.itemId,
+                    call_id: toolState.callId,
+                    type: "function_call",
+                    name: toolState.name,
+                    arguments: toolState.arguments,
+                    status: "completed"
+                }
+            });
+            toolState.done = true;
+        }
+    }
+
     toOpenAIResponsesResponse(openaiResponse, model) {
         if (!openaiResponse || !openaiResponse.choices || !openaiResponse.choices[0]) {
+            const responseId = `resp_${Date.now()}`;
             return {
-                id: `resp_${Date.now()}`,
+                id: responseId,
                 object: 'response',
                 created_at: Math.floor(Date.now() / 1000),
                 status: 'completed',
@@ -1624,23 +1880,46 @@ export class OpenAIConverter extends BaseConverter {
         const choice = openaiResponse.choices[0];
         const message = choice.message || {};
         const output = [];
+        const responseId = openaiResponse.id || `resp_${uuidv4().replace(/-/g, '')}`;
+        const messageItemId = this._buildResponsesMessageItemId(responseId, 0);
+        const reasoningValue = message.reasoning_content || message.reasoning || '';
+        const reasoningText = typeof reasoningValue === 'string'
+            ? reasoningValue
+            : JSON.stringify(reasoningValue);
 
-        // 构建message输出
-        const messageContent = [];
-        if (message.content) {
-            messageContent.push({
-                type: 'output_text',
-                text: message.content
+        if (reasoningText) {
+            output.push({
+                id: this._buildResponsesReasoningItemId(responseId, 0),
+                type: 'reasoning',
+                status: 'completed',
+                summary: [{
+                    type: 'summary_text',
+                    text: reasoningText
+                }]
             });
         }
 
-        output.push({
-            type: 'message',
-            id: `msg_${Date.now()}`,
-            status: 'completed',
-            role: 'assistant',
-            content: messageContent
-        });
+        // 构建message输出
+        const messageContent = [];
+        if (message.content !== null && message.content !== undefined && message.content !== '') {
+            messageContent.push({
+                type: 'output_text',
+                text: message.content,
+                annotations: [],
+                logprobs: []
+            });
+        }
+
+        if (messageContent.length > 0 || !reasoningText) {
+            output.push({
+                type: 'message',
+                id: messageItemId,
+                summary: [],
+                status: 'completed',
+                role: 'assistant',
+                content: messageContent
+            });
+        }
 
         // Handle tool calls (function_call output items)
         if (message.tool_calls && message.tool_calls.length > 0) {
@@ -1648,7 +1927,7 @@ export class OpenAIConverter extends BaseConverter {
                 if (tc.type === 'function' && tc.function) {
                     output.push({
                         type: 'function_call',
-                        id: tc.id || `fc_${Date.now()}`,
+                        id: this._buildResponsesFunctionItemId(tc.id),
                         call_id: tc.id || `call_${Date.now()}`,
                         name: tc.function.name,
                         arguments: tc.function.arguments || '{}',
@@ -1660,34 +1939,39 @@ export class OpenAIConverter extends BaseConverter {
 
         const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
 
+        const usage = this._buildResponsesUsageFromOpenAIUsage(openaiResponse.usage);
+        const status = hasToolCalls ? 'requires_action' : (choice.finish_reason === 'stop' ? 'completed' : 'in_progress');
+
         return {
-            id: openaiResponse.id || `resp_${Date.now()}`,
+            background: false,
+            id: responseId,
             object: 'response',
             created_at: openaiResponse.created || Math.floor(Date.now() / 1000),
-            status: hasToolCalls ? 'requires_action' : (choice.finish_reason === 'stop' ? 'completed' : 'in_progress'),
+            status,
+            error: null,
+            incomplete_details: null,
+            instructions: '',
+            max_output_tokens: null,
+            max_tool_calls: null,
+            metadata: {},
             model: model || openaiResponse.model || 'unknown',
-            output: output,
-            usage: openaiResponse.usage ? {
-                input_tokens: openaiResponse.usage.prompt_tokens || 0,
-                input_tokens_details: {
-                    cached_tokens: openaiResponse.usage.prompt_tokens_details?.cached_tokens || 0
-                },
-                output_tokens: openaiResponse.usage.completion_tokens || 0,
-                output_tokens_details: {
-                    reasoning_tokens: openaiResponse.usage.completion_tokens_details?.reasoning_tokens || 0
-                },
-                total_tokens: openaiResponse.usage.total_tokens || 0
-            } : {
-                input_tokens: 0,
-                input_tokens_details: {
-                    cached_tokens: 0
-                },
-                output_tokens: 0,
-                output_tokens_details: {
-                    reasoning_tokens: 0
-                },
-                total_tokens: 0
-            }
+            output,
+            parallel_tool_calls: true,
+            previous_response_id: null,
+            prompt_cache_key: null,
+            reasoning: {},
+            safety_identifier: openaiResponse.safety_identifier || `user-${responseId}`,
+            service_tier: openaiResponse.service_tier || 'default',
+            store: false,
+            temperature: 1,
+            text: { format: { type: 'text' } },
+            tool_choice: 'auto',
+            tools: [],
+            top_logprobs: 0,
+            top_p: 1,
+            truncation: 'disabled',
+            usage,
+            user: null
         };
     }
 
@@ -1700,28 +1984,50 @@ export class OpenAIConverter extends BaseConverter {
             return [];
         }
 
-        const responseId = requestId || `resp_${uuidv4().replace(/-/g, '')}`;
+        const { stateKey, state } = this._getOpenAIResponsesStreamState(openaiChunk, model, requestId);
         const choice = openaiChunk.choices[0];
         const delta = choice.delta || {};
         const events = [];
 
         // 第一个chunk - role为assistant时调用 getOpenAIResponsesStreamChunkBegin
         if (delta.role === 'assistant') {
-            events.push(
-                generateResponseCreated(responseId, model || openaiChunk.model || 'unknown'),
-                generateResponseInProgress(responseId),
-                generateOutputItemAdded(responseId),
-                generateContentPartAdded(responseId)
-            );
+            this._ensureOpenAIResponsesStreamStarted(stateKey, state, events);
         }
 
         // 处理 reasoning_content（推理内容）
         if (delta.reasoning_content) {
+            this._ensureOpenAIResponsesStreamStarted(stateKey, state, events);
+            if (!state.reasoningStarted) {
+                state.reasoningId = `rs_${state.responseId}_0`;
+                events.push({
+                    type: "response.output_item.added",
+                    output_index: 0,
+                    item: {
+                        id: state.reasoningId,
+                        type: "reasoning",
+                        status: "in_progress",
+                        summary: []
+                    }
+                });
+                events.push({
+                    type: "response.reasoning_summary_part.added",
+                    item_id: state.reasoningId,
+                    output_index: 0,
+                    summary_index: 0,
+                    part: {
+                        type: "summary_text",
+                        text: ""
+                    }
+                });
+                state.reasoningStarted = true;
+            }
+            state.reasoningText += delta.reasoning_content;
             events.push({
                 delta: delta.reasoning_content,
-                item_id: `thinking_${uuidv4().replace(/-/g, '')}`,
+                item_id: state.reasoningId,
                 output_index: 0,
                 sequence_number: 3,
+                summary_index: 0,
                 type: "response.reasoning_summary_text.delta"
             });
         }
@@ -1729,30 +2035,22 @@ export class OpenAIConverter extends BaseConverter {
         // 处理 tool_calls（工具调用）
         if (delta.tool_calls && delta.tool_calls.length > 0) {
             for (const toolCall of delta.tool_calls) {
-                const outputIndex = toolCall.index || 0;
+                this._ensureOpenAIResponsesStreamStarted(stateKey, state, events);
+                const toolState = this._getOpenAIResponsesToolState(state, toolCall);
 
                 // 如果有 function.name，说明是工具调用开始
-                if (toolCall.function && toolCall.function.name) {
-                    events.push({
-                        item: {
-                            id: toolCall.id || `call_${uuidv4().replace(/-/g, '')}`,
-                            type: "function_call",
-                            name: toolCall.function.name,
-                            arguments: "",
-                            status: "in_progress"
-                        },
-                        output_index: outputIndex,
-                        sequence_number: 2,
-                        type: "response.output_item.added"
-                    });
+                if (toolCall.function && (toolCall.function.name || toolCall.id)) {
+                    this._emitOpenAIResponsesToolStart(toolState, events);
                 }
 
                 // 如果有 function.arguments，说明是参数增量
                 if (toolCall.function && toolCall.function.arguments) {
+                    this._emitOpenAIResponsesToolStart(toolState, events);
+                    toolState.arguments += toolCall.function.arguments;
                     events.push({
                         delta: toolCall.function.arguments,
-                        item_id: toolCall.id || `call_${uuidv4().replace(/-/g, '')}`,
-                        output_index: outputIndex,
+                        item_id: toolState.itemId,
+                        output_index: toolState.outputIndex,
                         sequence_number: 3,
                         type: "response.function_call_arguments.delta"
                     });
@@ -1762,23 +2060,74 @@ export class OpenAIConverter extends BaseConverter {
 
         // 处理普通文本内容
         if (delta.content) {
-            events.push({
-                delta: delta.content,
-                item_id: `msg_${uuidv4().replace(/-/g, '')}`,
-                output_index: 0,
-                sequence_number: 3,
-                type: "response.output_text.delta"
-            });
+            this._ensureOpenAIResponsesTextStarted(stateKey, state, events);
+            events.push(generateOutputTextDelta(stateKey, delta.content));
         }
 
         // 处理完成状态 - 调用 getOpenAIResponsesStreamChunkEnd
         if (choice.finish_reason) {
-            events.push(
-                generateOutputTextDone(responseId),
-                generateContentPartDone(responseId),
-                generateOutputItemDone(responseId),
-                generateResponseCompleted(responseId)
-            );
+            this._ensureOpenAIResponsesStreamStarted(stateKey, state, events);
+            if (state.reasoningStarted) {
+                events.push({
+                    type: "response.reasoning_summary_text.done",
+                    item_id: state.reasoningId,
+                    output_index: 0,
+                    summary_index: 0,
+                    text: state.reasoningText
+                });
+                events.push({
+                    type: "response.reasoning_summary_part.done",
+                    item_id: state.reasoningId,
+                    output_index: 0,
+                    summary_index: 0,
+                    part: {
+                        type: "summary_text",
+                        text: state.reasoningText
+                    }
+                });
+                events.push({
+                    type: "response.output_item.done",
+                    output_index: 0,
+                    item: {
+                        id: state.reasoningId,
+                        type: "reasoning",
+                        status: "completed",
+                        summary: [{
+                            type: "summary_text",
+                            text: state.reasoningText
+                        }]
+                    }
+                });
+            }
+            if (state.textStarted) {
+                events.push(
+                    generateOutputTextDone(stateKey),
+                    generateContentPartDone(stateKey),
+                    generateOutputItemDone(stateKey)
+                );
+            }
+            this._finalizeOpenAIResponsesToolCalls(state, events);
+
+            const coreState = streamStateManager.getOrCreateState(stateKey);
+            coreState.toolCalls = Array.from(state.toolCalls.values()).map(toolState => ({
+                id: toolState.itemId,
+                call_id: toolState.callId,
+                name: toolState.name,
+                arguments: toolState.arguments || '{}'
+            }));
+            const completedEvent = generateResponseCompleted(stateKey, this._buildResponsesUsageFromOpenAIUsage(openaiChunk.usage));
+            if (state.reasoningStarted) {
+                completedEvent.response.output.unshift({
+                    id: state.reasoningId,
+                    type: "reasoning",
+                    status: "completed",
+                    summary: [{
+                        type: "summary_text",
+                        text: state.reasoningText
+                    }]
+                });
+            }
+            events.push(completedEvent);
 
             // 如果有 usage 信息，更新最后一个事件
             if (openaiChunk.usage && events.length > 0) {
@@ -1797,6 +2146,9 @@ export class OpenAIConverter extends BaseConverter {
                     };
                 }
             }
+
+            streamStateManager.cleanup(stateKey);
+            this.openAIResponsesStreamStates.delete(stateKey);
         }
 
         return events;

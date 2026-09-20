@@ -167,6 +167,39 @@ function getAvailableRoutes() {
             badgeClass: 'official'
         },
         {
+            provider: 'atlascloud',
+            name: 'AtlasCloud',
+            paths: {
+                openai: '/atlascloud/v1/chat/completions',
+                claude: '/atlascloud/v1/messages'
+            },
+            description: t('dashboard.routing.official'),
+            badge: t('dashboard.routing.official'),
+            badgeClass: 'official'
+        },
+        {
+            provider: 'qiniu',
+            name: 'Qiniu Cloud AI',
+            paths: {
+                openai: '/qiniu/v1/chat/completions',
+                claude: '/qiniu/v1/messages'
+            },
+            description: t('dashboard.routing.official'),
+            badge: t('dashboard.routing.official'),
+            badgeClass: 'official'
+        },
+        {
+            provider: 'fenno',
+            name: 'Fenno.ai',
+            paths: {
+                openai: '/fenno/v1/chat/completions',
+                claude: '/fenno/v1/messages'
+            },
+            description: t('dashboard.routing.official'),
+            badge: t('dashboard.routing.official'),
+            badgeClass: 'official'
+        },
+        {
             provider: 'gemini-cli-oauth',
             name: t('dashboard.routing.nodeName.gemini'),
             paths: {
@@ -216,6 +249,17 @@ function getAvailableRoutes() {
             paths: {
                 openai: '/openai-codex-oauth/v1/chat/completions',
                 claude: '/openai-codex-oauth/v1/messages'
+            },
+            description: t('dashboard.routing.oauth'),
+            badge: t('dashboard.routing.oauth'),
+            badgeClass: 'oauth'
+        },
+        {
+            provider: 'grok-cli-oauth',
+            name: t('dashboard.routing.nodeName.grokCli'),
+            paths: {
+                openai: '/grok-cli-oauth/v1/responses',
+                claude: '/grok-cli-oauth/v1/messages'
             },
             description: t('dashboard.routing.oauth'),
             badge: t('dashboard.routing.oauth'),
@@ -296,7 +340,9 @@ async function copyCurlExample(provider, options = {}) {
     }
     
     const { protocol = 'openai', model = 'default-model', message = 'Hello!' } = options;
-    const path = route.paths[protocol];
+    const path = protocol === 'responses'
+        ? `/${provider}/v1/responses`
+        : route.paths[protocol];
     
     if (!path) {
         showToast(t('common.error'), t('common.error'), 'error');
@@ -313,7 +359,16 @@ async function copyCurlExample(provider, options = {}) {
     const baseProviderId = routes.find(r => provider.startsWith(r.provider))?.provider || provider;
     
     // 根据不同提供商和协议生成对应的curl命令
-    switch (baseProviderId) {
+    if (protocol === 'responses') {
+        curlCommand = `curl ${hostname}${path} \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -d '{
+    "model": "${model}",
+    "input": "${message}",
+    "max_output_tokens": 1000
+  }'`;
+    } else switch (baseProviderId) {
         case 'claude-custom':
         case 'claude-kiro-oauth':
             if (protocol === 'openai') {
@@ -336,6 +391,9 @@ async function copyCurlExample(provider, options = {}) {
             }
             break;
             
+        case 'atlascloud':
+        case 'qiniu':
+        case 'fenno':
         case 'openai-custom':
         case 'openai-qwen-oauth':
         case 'openai-iflow':
@@ -384,6 +442,7 @@ async function copyCurlExample(provider, options = {}) {
             break;
             
         case 'openaiResponses-custom':
+        case 'grok-cli-oauth':
             if (protocol === 'openai') {
                 curlCommand = `curl ${hostname}${path} \\
   -H "Content-Type: application/json" \\
@@ -473,27 +532,36 @@ function renderRoutingExamples(providerConfigs) {
         'gemini-cli-oauth': 'fa-gem',
         'gemini-antigravity': 'fa-rocket',
         'openai-custom': 'fa-comments',
+        'atlascloud': 'fa-cloud',
+        'qiniu': 'fa-cloud',
+        'fenno': 'fa-code',
         'claude-custom': 'fa-brain',
         'claude-kiro-oauth': 'fa-robot',
         'openai-qwen-oauth': 'fa-code',
         'openaiResponses-custom': 'fa-comment-alt',
         'openai-iflow': 'fa-wind',
         'openai-codex-oauth': 'fa-keyboard',
+        'grok-cli-oauth': 'fa-terminal',
         'grok-web': 'fa-search'
     };
 
     // 默认模型映射 (用于 curl 示例)
     const modelMap = {
         'gemini-cli-oauth': 'gemini-3-flash-preview',
-        'gemini-antigravity': 'gemini-3-flash-preview',
-        'claude-custom': 'claude-sonnet-4-6',
-        'claude-kiro-oauth': 'claude-sonnet-4-6',
-        'openai-custom': 'gpt-4o',
+        'gemini-antigravity': 'gemini-3-flash',
+        'claude-custom': 'claude-sonnet-4-5',
+        'claude-kiro-oauth': 'claude-sonnet-4-5',
+        'openai-custom': 'gpt-5.5',
+        'atlascloud': 'gpt-5.5',
+        'qiniu': 'gpt-5.5',
+        'fenno': 'gpt-5.5',
         'openai-qwen-oauth': 'qwen3-coder-plus',
         'openai-iflow': 'qwen3-max',
         'openai-codex-oauth': 'gpt-5',
-        'grok-web': 'grok-4.1-mini',
-        'openaiResponses-custom': 'gpt-4o'
+        'openaiResponses-custom': 'gpt-5.5',
+        'grok-web': 'grok-4.3',
+        'grok-cli-oauth': 'grok-4.3',
+        'forward-api': 'gpt-5.5'
     };
 
     providerConfigs.forEach(config => {
@@ -551,6 +619,13 @@ function renderRoutingExamples(providerConfigs) {
         const hostname = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 
                          `http://${window.location.host}` : 
                          `${window.location.protocol}//${window.location.host}`;
+        const openaiRequestExample = routeInfo.paths.openai.includes('/v1/responses')
+            ? `    "model": "${defaultModel}",
+    "input": "Hello!",
+    "max_output_tokens": 1000`
+            : `    "model": "${defaultModel}",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 1000`;
 
         const card = document.createElement('div');
         card.className = 'routing-example-card';
@@ -579,9 +654,7 @@ function renderRoutingExamples(providerConfigs) {
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
-    "model": "${defaultModel}",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "max_tokens": 1000
+${openaiRequestExample}
   }'</code></pre>
                     </div>
                 </div>

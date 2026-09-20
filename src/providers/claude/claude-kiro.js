@@ -17,8 +17,14 @@ import {
     getContentText as getContentTextUtil
 } from '../../utils/token-utils.js';
 import { configureAxiosProxy, configureTLSSidecar, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
-import { isRetryableNetworkError, MODEL_PROVIDER, formatExpiryLog } from '../../utils/common.js';
+import { isRetryableNetworkError, MODEL_PROVIDER, formatExpiryLog, getNormalizedErrorResponseText, buildHttpErrorReason, normalizeProviderErrorMessage, createEmptyUpstreamResponseError } from '../../utils/common.js';
 import { getProviderPoolManager } from '../../services/service-manager.js';
+import { buildKiroAdditionalModelRequestFields } from './kiro-effort.js';
+import {
+    resolveKiroRequestProfileArn,
+    shouldDiscoverKiroProfile,
+    shouldRouteBuilderToCodeWhisperer
+} from './kiro-profile.js';
 
 const KIRO_THINKING = {
     MIN_BUDGET_TOKENS: 1024,
@@ -35,11 +41,16 @@ const KIRO_CONSTANTS = {
     REFRESH_URL: 'https://prod.{{region}}.auth.desktop.kiro.dev/refreshToken',
     REFRESH_IDC_URL: 'https://oidc.{{region}}.amazonaws.com/token',
     BASE_URL: 'https://q.{{region}}.amazonaws.com/generateAssistantResponse',
+    BASE_RUNTIME_URL: 'https://q.{{region}}.amazonaws.com/generateAssistantResponse',
+    CODEWHISPERER_BASE_URL: 'https://codewhisperer.{{region}}.amazonaws.com/generateAssistantResponse',
+    // 路径大小写敏感，小写会返回 UnknownOperationException
+    LIST_PROFILES_URL: 'https://codewhisperer.{{region}}.amazonaws.com/ListAvailableProfiles',
     DEFAULT_MODEL_NAME: 'claude-sonnet-4-5',
     AXIOS_TIMEOUT: 120000, // 2 minutes timeout for normal requests
     TOKEN_REFRESH_TIMEOUT: 15000, // 15 seconds timeout for token refresh (shorter to avoid blocking)
+    LIST_PROFILES_TIMEOUT: 10000, // 凭证装载期同步 await，不能久等
     USER_AGENT: 'KiroIDE',
-    KIRO_VERSION: '0.11.63',
+    KIRO_VERSION: '0.11.63', //升级到新版本会导致aws用不了，需要找新接口
     CONTENT_TYPE_JSON: 'application/json',
     ACCEPT_JSON: 'application/json',
     AUTH_METHOD_SOCIAL: 'social',
@@ -61,6 +72,50 @@ function shortenKiroToolName(name) {
     const hash = crypto.createHash('sha256').update(rawName).digest('hex').slice(0, 12);
     const prefixLength = KIRO_MAX_TOOL_NAME_LENGTH - hash.length - 1;
     return `${rawName.slice(0, prefixLength)}_${hash}`;
+}
+
+// Kiro/CodeWhisperer 的 generateAssistantResponse 在 tools 列表为空时会报 API 错误，
+// 因此客户端没有提供任何可用工具时，注入这个占位工具来满足 API 要求。
+// 描述里明确禁止调用它：否则模型（尤其被 agentic system prompt 引导时）会先说一句
+// "我来读取文件…" 的开场白再去调用这个空操作工具，导致本轮在没有实质内容的情况下结束。
+const KIRO_PLACEHOLDER_TOOL_NAME = 'no_tool_available';
+
+// 判断一个 Anthropic 消息是否"实质为空"：没有非空文本，也没有工具调用/工具结果/图片/思考内容。
+// 这类空轮次通常是客户端的占位或流式残留，塞进 Kiro 历史里既会撑大请求体、又可能触发 400，
+// 之前的做法是填充 "Continue"，反而污染了上下文。
+function isMeaningfulContentPart(part) {
+    if (!part || typeof part !== 'object') return false;
+    if (part.type === 'text') {
+        return typeof part.text === 'string' && part.text.trim() !== '';
+    }
+    // tool_use / tool_result / image / thinking / redacted_thinking 及其它未知类型都视为有意义，避免误删数据
+    return true;
+}
+
+function isEmptyAnthropicMessage(message) {
+    if (!message) return true;
+    const content = message.content;
+    if (content == null) return true;
+    if (typeof content === 'string') return content.trim() === '';
+    if (Array.isArray(content)) {
+        return content.length === 0 || !content.some(isMeaningfulContentPart);
+    }
+    return false;
+}
+
+function buildKiroPlaceholderTool() {
+    return {
+        toolSpecification: {
+            name: KIRO_PLACEHOLDER_TOOL_NAME,
+            description: 'Internal no-op placeholder. Never call this tool (or any tool) in this turn. Do not announce or promise actions such as reading files or running commands. Instead, write your full and complete answer directly as natural-language text in this single reply, based on the information already available to you.',
+            inputSchema: {
+                json: {
+                    type: "object",
+                    properties: {}
+                }
+            }
+        }
+    };
 }
 
 function buildKiroToolNameMaps(tools) {
@@ -153,6 +208,12 @@ function normalizeKiroToolInput(input) {
 
 // Per-model context window sizes for accurate token estimation
 const MODEL_CONTEXT_TOKENS = {
+    "gpt-5.6-sol": 1000000,
+    "gpt-5.6-terra": 1000000,
+    "gpt-5.6-luna": 1000000,
+    "claude-sonnet-5": 1000000,
+    "claude-opus-5": 1000000,
+    "claude-opus-4-8": 1000000,
     "claude-opus-4-7": 1000000,
     "claude-opus-4-6": 1000000,
     "claude-opus-4-5": 1000000,
@@ -202,7 +263,14 @@ const KIRO_MODELS = getProviderModels(MODEL_PROVIDER.KIRO_API);
 
 // 完整的模型映射表
 const FULL_MODEL_MAPPING = {
+    "gpt-5.6-sol":"gpt-5.6-sol",
+    "gpt-5.6-terra":"gpt-5.6-terra",
+    "gpt-5.6-luna":"gpt-5.6-luna",
     "claude-haiku-4-5":"claude-haiku-4.5",
+    "claude-haiku-4-5-20251001":"claude-haiku-4.5",
+    "claude-sonnet-5":"claude-sonnet-5",
+    "claude-opus-5":"claude-opus-5",
+    "claude-opus-4-8":"claude-opus-4.8",
     "claude-opus-4-7":"claude-opus-4.7",
     "claude-opus-4-6":"claude-opus-4.6",
     "claude-sonnet-4-6":"claude-sonnet-4.6",
@@ -216,6 +284,22 @@ const FULL_MODEL_MAPPING = {
 const MODEL_MAPPING = Object.fromEntries(
     Object.entries(FULL_MODEL_MAPPING).filter(([key]) => KIRO_MODELS.includes(key))
 );
+
+function resolveKiroModel(model, config = {}) {
+    if (MODEL_MAPPING[model]) {
+        return MODEL_MAPPING[model];
+    }
+
+    if (findCustomModelConfigForModel(model, config)) {
+        return model;
+    }
+
+    if (config.MODEL_FALLBACK_ENABLED === false) {
+        throw new Error(`[Kiro] 模型不存在: ${model}`);
+    }
+
+    return model;
+}
 
 const KIRO_AUTH_TOKEN_FILE = "kiro-auth-token.json";
 
@@ -539,12 +623,34 @@ function deduplicateToolCalls(toolCalls) {
     return uniqueToolCalls;
 }
 
+/**
+ * Kiro 上游返回了 HTTP 200 但内容完全为空（无文本、无工具调用、无思考内容）时使用的错误。
+ * 复用 common.js 中通用的 createEmptyUpstreamResponseError（error.isEmptyUpstreamResponse），
+ * 以便与 handleStreamRequest / handleUnaryRequest 里 provider 无关的空响应重试分支对接。
+ * 标记为可切换凭证重试，且不计入凭证错误次数（这不是凭证本身的问题，可能是历史/会话导致 Kiro 静默无输出）。
+ */
+function createKiroEmptyResponseError() {
+    return createEmptyUpstreamResponseError('Kiro');
+}
+
+async function getKiroErrorResponsePreview(error, maxLength = 500) {
+    try {
+        const responseText = await getNormalizedErrorResponseText(error);
+        return String(responseText || '').substring(0, maxLength);
+    } catch (previewError) {
+        // 错误日志绝不能覆盖真正的请求异常；无法格式化时只记录摘要失败。
+        logger.warn(`[Kiro] Failed to format error response body: ${previewError?.message || 'unknown error'}`);
+        return '';
+    }
+}
+
 export class KiroApiService {
     constructor(config = {}) {
         this.isInitialized = false;
         this.config = config;
         this.credPath = config.KIRO_OAUTH_CREDS_DIR_PATH || path.join(os.homedir(), ".aws", "sso", "cache");
         this.credsBase64 = config.KIRO_OAUTH_CREDS_BASE64;
+        this.apiKey = config.KIRO_API_KEY || (typeof process !== 'undefined' ? process.env.KIRO_API_KEY : null);
         this.useSystemProxy = config?.USE_SYSTEM_PROXY_KIRO ?? false;
         this.uuid = config?.uuid; // 获取多节点配置的 uuid
         logger.info(`[Kiro] System proxy ${this.useSystemProxy ? 'enabled' : 'disabled'}`);
@@ -575,6 +681,7 @@ export class KiroApiService {
         this.modelName = KIRO_CONSTANTS.DEFAULT_MODEL_NAME;
         this.axiosInstance = null; // Initialize later in async method
         this.axiosSocialRefreshInstance = null;
+        this._tokenRefreshPromise = null;
     }
  
     async initialize() {
@@ -593,22 +700,6 @@ export class KiroApiService {
         const kiroVersion = KIRO_CONSTANTS.KIRO_VERSION;
         const { osName, nodeVersion } = getSystemRuntimeInfo();
 
-        // 配置 HTTP/HTTPS agent 限制连接池大小，避免资源泄漏
-        const httpAgent = new http.Agent({
-            keepAlive: true,
-            maxSockets: 100,        // 每个主机最多 100 个连接
-            maxFreeSockets: 5,     // 最多保留 5 个空闲连接
-            timeout: KIRO_CONSTANTS.AXIOS_TIMEOUT,
-        });
-        const httpsAgent = new https.Agent({
-            keepAlive: true,
-            maxSockets: 100,
-            maxFreeSockets: 5,
-            timeout: KIRO_CONSTANTS.AXIOS_TIMEOUT,
-        });
-        
-        const isTLSSidecarEnabled = isTLSSidecarEnabledForProvider(this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.KIRO_API);
-        
         const axiosConfig = {
             timeout: KIRO_CONSTANTS.AXIOS_TIMEOUT,
             headers: {
@@ -616,21 +707,12 @@ export class KiroApiService {
                 'Accept': KIRO_CONSTANTS.ACCEPT_JSON,
                 'amz-sdk-invocation-id': uuidv4(),
                 'amz-sdk-request': 'attempt=1; max=3',
-                'x-amzn-codewhisperer-optout': true,
-                'x-amzn-kiro-agent-mode': 'vibe',
-                'x-amz-user-agent': `aws-sdk-js/1.0.34 KiroIDE-${kiroVersion}-${machineId}`,
-                'user-agent': `aws-sdk-js/1.0.34 ua/2.1 os/${osName} lang/js md/nodejs#${nodeVersion} api/codewhispererstreaming#1.0.34 m/E KiroIDE-${kiroVersion}-${machineId}`,
+                'x-amz-target': 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
+                'x-amz-user-agent': 'aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererstreaming/0.1.17593 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI',
+                'user-agent': 'aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererstreaming/0.1.17593 os/linux lang/rust/1.92.0 md/appVersion-2.10.0 app/AmazonQ-For-CLI',
                 'Connection': 'close'
             },
         };
-
-        // 如果启用了 TLS Sidecar，就不配置 httpAgent 和 httpsAgent，避免配置冲突
-        if (!isTLSSidecarEnabled) {
-            axiosConfig.httpAgent = httpAgent;
-            axiosConfig.httpsAgent = httpsAgent;
-            // 配置自定义代理
-            configureAxiosProxy(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.KIRO_API);
-        }
         
         this.axiosInstance = axios.create(axiosConfig);
 
@@ -642,6 +724,27 @@ export class KiroApiService {
 
     _applySidecar(axiosConfig) {
         return configureTLSSidecar(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.KIRO_API);
+    }
+
+    async _requestWithBuilderEndpointRouting(axiosConfig, requestData) {
+        const routeToCodeWhisperer = shouldRouteBuilderToCodeWhisperer({
+            authMethod: this.authMethod,
+            profileArn: this.profileArn,
+            requestUrl: axiosConfig.url
+        });
+        if (!routeToCodeWhisperer) {
+            return await this.axiosInstance.request(axiosConfig);
+        }
+
+        const routedData = { ...requestData };
+        delete routedData.profileArn;
+        const routedConfig = {
+            ...axiosConfig,
+            url: this.codewhispererBaseUrl,
+            data: routedData
+        };
+        logger.info('[Kiro] Routing profileless Builder ID request through CodeWhisperer.');
+        return await this.axiosInstance.request(routedConfig);
     }
 
 /**
@@ -741,10 +844,13 @@ async loadCredentials() {
         applyCredential('profileArn');
         applyCredential('region');
         applyCredential('idcRegion');
+        if (this.apiKey || (typeof process !== 'undefined' && process.env.KIRO_API_KEY)) {
+            this.accessToken = this.apiKey || process.env.KIRO_API_KEY;
+        }
 
         if (!this.region) {
-            logger.warn('[Kiro Auth] Region not found in credentials. Using default region us-east-1 for URLs.');
-            this.region = 'us-east-1';
+            this.region = this.idcRegion || 'us-east-1';
+            logger.warn(`[Kiro Auth] Region not found in credentials. Using idcRegion/default: ${this.region}`);
         }
 
         // idcRegion 用于 REFRESH_IDC_URL，如果未设置则使用 region
@@ -752,11 +858,121 @@ async loadCredentials() {
             this.idcRegion = this.region;
         }
 
+        const hasIdcClientCredentials = !!(this.clientId && this.clientSecret);
+        const isSocialAuth = this.authMethod === KIRO_CONSTANTS.AUTH_METHOD_SOCIAL ||
+            (!this.authMethod && !hasIdcClientCredentials);
+
+        let defaultBaseUrl = KIRO_CONSTANTS.BASE_URL;
+        if (isSocialAuth) {
+            defaultBaseUrl = KIRO_CONSTANTS.BASE_RUNTIME_URL;
+        }
+
         this.refreshUrl = (this.config.KIRO_REFRESH_URL || KIRO_CONSTANTS.REFRESH_URL).replace("{{region}}", this.region);
         this.refreshIDCUrl = (this.config.KIRO_REFRESH_IDC_URL || KIRO_CONSTANTS.REFRESH_IDC_URL).replace("{{region}}", this.idcRegion);
-        this.baseUrl = (this.config.KIRO_BASE_URL || KIRO_CONSTANTS.BASE_URL).replace("{{region}}", this.region);
+        this.baseUrl = (this.config.KIRO_BASE_URL || defaultBaseUrl).replace("{{region}}", this.region);
+        this.codewhispererBaseUrl = KIRO_CONSTANTS.CODEWHISPERER_BASE_URL.replace("{{region}}", this.region);
+
+        // AWS OIDC 凭证在装载期尝试发现 profileArn；无法发现时，
+        // profileless Builder ID 仍会路由到无需 profileArn 的端点。
+        await this._ensureProfileArn(isSocialAuth);
     } catch (error) {
         logger.warn(`[Kiro Auth] Error during credential loading: ${error.message}`);
+    }
+}
+
+/**
+ * 解析 this.profileArn（唯一决策点）。
+ * profileArn 是 CodeWhisperer 的订阅归属标识，缺失时上游返回 403 AccessDeniedException。
+ * social 凭证由 Kiro auth 服务随刷新响应下发该字段；AWS OIDC 刷新响应
+ * 不包含它，需要自行查询。查询失败时保持 profileless，后续 Builder ID 请求
+ * 会路由到无需该字段的端点。
+ * @param {boolean} isSocialAuth
+ * @private
+ */
+async _ensureProfileArn(isSocialAuth) {
+    // social token 非 AWS 签发，ListAvailableProfiles 对它不适用。
+    // Builder ID 与 Enterprise IdC 共用 AWS OIDC 凭证形态，不能仅凭
+    // authMethod/clientSecret 区分；统一尝试发现，失败时由请求路由安全降级。
+    if (!shouldDiscoverKiroProfile({ isSocialAuth, profileArn: this.profileArn })) {
+        return;
+    }
+
+    // 发现结果由 _doTokenRefresh 的回写落入凭证文件，每份凭证通常只需发现一次。
+    const discovered = await this._discoverProfileArn();
+    if (discovered) {
+        this.profileArn = discovered;
+        logger.info(`[Kiro Auth] profileArn discovered: ${discovered}`);
+    }
+}
+
+/**
+ * 查询当前 token 可用的 profile。该接口不需要 profileArn，可用于自举。
+ * 失败返回 null 而不抛错：调用方在凭证装载路径上，抛错会阻塞初始化；包装异常还会
+ * 丢掉 status，使上层按状态码分流的重试 / 切凭证失效。
+ * @returns {Promise<string|null>}
+ * @private
+ */
+async _discoverProfileArn() {
+    // 无可用 token 时调用必然失败；刷新成功后 _doTokenRefresh 会立即重试。
+    if (!this.accessToken || this.isTokenExpired()) {
+        logger.debug('[Kiro Auth] Skip profileArn discovery: no usable access token yet.');
+        return null;
+    }
+
+    const url = KIRO_CONSTANTS.LIST_PROFILES_URL.replace('{{region}}', this.region);
+    const machineId = generateMachineIdFromConfig({
+        uuid: this.uuid,
+        profileArn: this.profileArn,
+        clientId: this.clientId
+    });
+    const { osName, nodeVersion } = getSystemRuntimeInfo();
+    const kiroVersion = KIRO_CONSTANTS.KIRO_VERSION;
+
+    const axiosConfig = {
+        method: 'post',
+        url,
+        data: { maxResults: 10 },
+        timeout: KIRO_CONSTANTS.LIST_PROFILES_TIMEOUT,
+        headers: {
+            'Content-Type': KIRO_CONSTANTS.CONTENT_TYPE_JSON,
+            'Accept': KIRO_CONSTANTS.ACCEPT_JSON,
+            'Authorization': `Bearer ${this.accessToken}`,
+            'amz-sdk-invocation-id': uuidv4(),
+            'amz-sdk-request': 'attempt=1; max=1',
+            'x-amz-user-agent': `aws-sdk-js/1.0.34 KiroIDE-${kiroVersion}-${machineId}`,
+            'user-agent': `aws-sdk-js/1.0.34 ua/2.1 os/${osName} lang/js md/nodejs#${nodeVersion} api/codewhisperer#1.0.34 m/E KiroIDE-${kiroVersion}-${machineId}`,
+            'Connection': 'close'
+        }
+    };
+    this._applySidecar(axiosConfig);
+
+    try {
+        const response = await axios.request(axiosConfig);
+        const profiles = response.data?.profiles;
+        if (!Array.isArray(profiles) || profiles.length === 0) {
+            logger.warn('[Kiro Auth] ListAvailableProfiles returned no profiles.');
+            return null;
+        }
+
+        // 优先取与当前 region 匹配的，否则回退到第一个
+        const matched = profiles.find(p => p?.arn && typeof p.arn === 'string' && p.arn.includes(`:${this.region}:`));
+        const picked = matched || profiles.find(p => p?.arn);
+        if (!picked?.arn) {
+            logger.warn('[Kiro Auth] ListAvailableProfiles returned profiles without arn.');
+            return null;
+        }
+
+        if (profiles.length > 1) {
+            const all = profiles.map(p => p?.arn).filter(Boolean).join(', ');
+            logger.info(`[Kiro Auth] ${profiles.length} profiles available [${all}], selected ${picked.profileName || picked.arn}.`);
+        }
+        return picked.arn;
+    } catch (error) {
+        // 静默降级，由上层的 403 处理接手。
+        const status = error.response?.status;
+        const detail = error.response?.data?.message || error.message;
+        logger.warn(`[Kiro Auth] profileArn discovery failed${status ? ` (HTTP ${status})` : ''}: ${detail}`);
+        return null;
     }
 }
 
@@ -766,22 +982,41 @@ async initializeAuth(forceRefresh = false) {
         return;
     }
 
-    // 首先执行基础凭证加载
-    await this.loadCredentials();
-
-    // 只有在明确要求强制刷新，或者 AccessToken 确实缺失时，才执行刷新
-    // 注意：在 V2 架构下，此方法主要由 PoolManager 的后台队列调用
-    if (forceRefresh || (!this.accessToken && this.refreshToken)) {
-        if (!this.refreshToken) {
-            throw new Error('No refresh token available to refresh access token.');
-        }
-
-        const tokenFilePath = this.credsFilePath || path.join(this.credPath, KIRO_AUTH_TOKEN_FILE);
-        await this._doTokenRefresh(this.saveCredentialsToFile.bind(this), tokenFilePath);
+    if (this._tokenRefreshPromise) {
+        await this._tokenRefreshPromise;
+        return;
     }
 
-    if (!this.accessToken) {
-        throw new Error('No access token available after initialization and refresh attempts.');
+    const authOperation = (async () => {
+        // Credential loading belongs to the single-flight operation. Otherwise,
+        // a concurrent caller can reload an expired token while refresh is
+        // writing the new token and overwrite the fresh in-memory value.
+        await this.loadCredentials();
+
+        // 只有在明确要求强制刷新，或者 AccessToken 确实缺失时，才执行刷新
+        // 注意：在 V2 架构下，此方法主要由 PoolManager 的后台队列调用
+        if (this.accessToken && this.accessToken.startsWith('ksk_')) return;
+        if (forceRefresh || (!this.accessToken && this.refreshToken)) {
+            if (!this.refreshToken) {
+                throw new Error('No refresh token available to refresh access token.');
+            }
+
+            const tokenFilePath = this.credsFilePath || path.join(this.credPath, KIRO_AUTH_TOKEN_FILE);
+            await this._doTokenRefresh(this.saveCredentialsToFile.bind(this), tokenFilePath);
+        }
+
+        if (!this.accessToken) {
+            throw new Error('No access token available after initialization and refresh attempts.');
+        }
+    })();
+
+    this._tokenRefreshPromise = authOperation;
+    try {
+        await authOperation;
+    } finally {
+        if (this._tokenRefreshPromise === authOperation) {
+            this._tokenRefreshPromise = null;
+        }
     }
 }
 
@@ -883,6 +1118,11 @@ async saveCredentialsToFile(filePath, newData) {
                 this.expiresAt = expiresAt;
                 logger.info('[Kiro Auth] Access token refreshed successfully');
 
+                // IdC refresh responses do not include profileArn. Discover it now that
+                // the fresh token and expiry are installed, before the first generation
+                // request and before persisting the refreshed credentials.
+                await this._ensureProfileArn(isSocialAuth);
+
                 const updatedTokenData = {
                     accessToken: this.accessToken,
                     refreshToken: this.refreshToken,
@@ -902,8 +1142,11 @@ async saveCredentialsToFile(filePath, newData) {
                 throw new Error('Invalid refresh response: Missing accessToken');
             }
         } catch (error) {
-            logger.error('[Kiro Auth] Token refresh failed:', error.message);
-            throw new Error(`Token refresh failed: ${error.message}`);
+            const status = error.response?.status;
+            const responseBodyPreview = await getKiroErrorResponsePreview(error);
+            const detail = responseBodyPreview || error.message;
+            logger.error(`[Kiro Auth] Token refresh failed${status ? ` (HTTP ${status})` : ''}: ${detail}`);
+            throw new Error(`Token refresh failed${status ? ` (HTTP ${status})` : ''}: ${detail}`);
         }
     }
 
@@ -937,6 +1180,38 @@ async saveCredentialsToFile(filePath, newData) {
      */
     getContentText(message) {
         return getContentTextUtil(message);
+    }
+
+    _extractTextAndImagesFromContent(content, totalMessages = null) {
+        const result = { text: '', images: [], imageCount: 0 };
+        const shouldKeepImages = totalMessages === null ? true : (totalMessages - 1) <= 5;
+        if (Array.isArray(content)) {
+            for (const part of content) {
+                if (part.type === 'text') {
+                    result.text += part.text || '';
+                } else if (part.type === 'image' && part.source?.data) {
+                    result.imageCount++;
+                    if (shouldKeepImages) result.images.push({
+                        format: part.source.media_type.split('/')[1],
+                        source: { bytes: part.source.data }
+                    });
+                } else if (part.type === 'image_url' && part.image_url) {
+                    const imageUrl = typeof part.image_url === 'string' ? part.image_url : part.image_url.url;
+                    if (imageUrl && imageUrl.startsWith('data:')) {
+                        const [header, data] = imageUrl.split(',');
+                        const mediaType = header.split(':')[1]?.split(';')[0] || 'image/jpeg';
+                        result.imageCount++;
+                        if (shouldKeepImages) result.images.push({
+                            format: mediaType.split('/')[1] || 'jpeg',
+                            source: { bytes: data }
+                        });
+                    }
+                }
+            }
+            return result;
+        }
+        result.text = getContentTextUtil({ content });
+        return result;
     }
 
     /**
@@ -1042,7 +1317,8 @@ async saveCredentialsToFile(filePath, newData) {
     /**
      * Build CodeWhisperer request from OpenAI messages
      */
-    async buildCodewhispererRequest(messages, model, tools = null, inSystemPrompt = null, thinking = null) {
+
+    async buildCodewhispererRequest(messages, model, tools = null, inSystemPrompt = null, thinking = null, outputConfig = null, reasoningEffort = null) {
         const conversationId = uuidv4();
         
         // 内置的 systemPrompt 前缀
@@ -1053,7 +1329,10 @@ async saveCredentialsToFile(filePath, newData) {
                                </CRITICAL_OVERRIDE>
                                <identity>
                                 你是 {{identity}}，一名拥有多种编程语言、框架、设计模式和最佳实践丰富知识的高级软件工程师。
-                               </identity>`;
+                               </identity>
+                               <tool_use_guidelines>
+                                写数据时需要强制拆小，使用分段写入/编辑工具，而不是一次性写入或者编辑。
+                               </tool_use_guidelines>`;
         
         let systemPrompt = this.getContentText(inSystemPrompt);
         // 在 systemPrompt 前面添加内置前缀
@@ -1087,6 +1366,18 @@ async saveCredentialsToFile(filePath, newData) {
             if (lastMessage.content[0].type === "text" && lastMessage.content[0].text === "{") {
                 logger.info('[Kiro] Removing last assistant with "{" message from processedMessages');
                 processedMessages.pop();
+            }
+        }
+
+        // 移除实质为空的历史轮次（空文本、无工具调用/结果/图片/思考）。这些空轮次以前会被填成
+        // "Continue" 污染上下文并撑大请求体。在合并前移除后，相邻同 role 消息会被下面的合并步骤归并，
+        // 因此不会破坏 Kiro 要求的 user/assistant 交替。若过滤后为空则保留原数组，交由后续兜底逻辑处理。
+        if (processedMessages.length > 1) {
+            const nonEmptyMessages = processedMessages.filter(m => !isEmptyAnthropicMessage(m));
+            if (nonEmptyMessages.length > 0 && nonEmptyMessages.length < processedMessages.length) {
+                logger.info(`[Kiro] Removed ${processedMessages.length - nonEmptyMessages.length} empty message turn(s) before building history`);
+                processedMessages.length = 0;
+                processedMessages.push(...nonEmptyMessages);
             }
         }
 
@@ -1127,7 +1418,7 @@ async saveCredentialsToFile(filePath, newData) {
         processedMessages.length = 0;
         processedMessages.push(...mergedMessages);
 
-        const codewhispererModel = MODEL_MAPPING[model] || model;
+        const codewhispererModel = resolveKiroModel(model, this.config);
         const toolNameMaps = buildKiroToolNameMaps(tools);
         
         // 动态压缩 tools（保留全部工具，但过滤掉 web_search/websearch）
@@ -1146,19 +1437,7 @@ async saveCredentialsToFile(filePath, newData) {
             if (filteredTools.length === 0) {
                 // 所有工具都被过滤掉了，添加一个占位工具
                 logger.info('[Kiro] All tools were filtered out, adding placeholder tool');
-                const placeholderTool = {
-                    toolSpecification: {
-                        name: "no_tool_available",
-                        description: "This is a placeholder tool when no other tools are available. It does nothing.",
-                        inputSchema: {
-                            json: {
-                                type: "object",
-                                properties: {}
-                            }
-                        }
-                    }
-                };
-                toolsContext = { tools: [placeholderTool] };
+                toolsContext = { tools: [buildKiroPlaceholderTool()] };
             } else {
                 const MAX_DESCRIPTION_LENGTH = 9216;
 
@@ -1182,7 +1461,7 @@ async saveCredentialsToFile(filePath, newData) {
                             logger.info(`[Kiro] Truncated tool '${tool.name}' description: ${originalLength} -> ${desc.length} chars`);
                         }
                         
-                        return {
+                        const entry = {
                             toolSpecification: {
                                 name: toolNameMaps.toKiroName(tool.name),
                                 description: desc,
@@ -1191,7 +1470,10 @@ async saveCredentialsToFile(filePath, newData) {
                                 }
                             }
                         };
-                    });
+                        return tool.cache_control
+                            ? [entry, { cachePoint: { type: "default" } }]
+                            : [entry];
+                    }).flat();
                 
                 if (truncatedCount > 0) {
                     logger.info(`[Kiro] Truncated ${truncatedCount} tool description(s) to max ${MAX_DESCRIPTION_LENGTH} chars`);
@@ -1200,19 +1482,7 @@ async saveCredentialsToFile(filePath, newData) {
                 // 检查过滤后是否还有有效工具
                 if (kiroTools.length === 0) {
                     logger.info('[Kiro] All tools were filtered out (empty descriptions), adding placeholder tool');
-                    const placeholderTool = {
-                        toolSpecification: {
-                            name: "no_tool_available",
-                            description: "This is a placeholder tool when no other tools are available. It does nothing.",
-                            inputSchema: {
-                                json: {
-                                    type: "object",
-                                    properties: {}
-                                }
-                            }
-                        }
-                    };
-                    toolsContext = { tools: [placeholderTool] };
+                    toolsContext = { tools: [buildKiroPlaceholderTool()] };
                 } else {
                     toolsContext = { tools: kiroTools };
                 }
@@ -1220,19 +1490,7 @@ async saveCredentialsToFile(filePath, newData) {
         } else {
             // tools 为空或长度为 0 时，自动添加一个占位工具
             logger.info('[Kiro] No tools provided, adding placeholder tool');
-            const placeholderTool = {
-                toolSpecification: {
-                    name: "no_tool_available",
-                    description: "This is a placeholder tool when no other tools are available. It does nothing.",
-                    inputSchema: {
-                        json: {
-                            type: "object",
-                            properties: {}
-                        }
-                    }
-                }
-            };
-            toolsContext = { tools: [placeholderTool] };
+            toolsContext = { tools: [buildKiroPlaceholderTool()] };
         }
 
         const history = [];
@@ -1247,14 +1505,23 @@ async saveCredentialsToFile(filePath, newData) {
             if (processedMessages[0].role === 'user' && processedMessages.length === 1) {
                 prependSystemToCurrentMessage = true;
             } else if (processedMessages[0].role === 'user') {
-                let firstUserContent = this.getContentText(processedMessages[0]);
-                history.push({
+                const firstUserPayload = this._extractTextAndImagesFromContent(processedMessages[0].content, processedMessages.length);
+                const firstImagePlaceholder = firstUserPayload.imageCount > 0 && firstUserPayload.images.length === 0
+                    ? `[此消息包含 ${firstUserPayload.imageCount} 张图片，已在历史记录中省略]`
+                    : '';
+                const firstHistoryMsg = {
                     userInputMessage: {
-                        content: `${systemPrompt}\n\n${firstUserContent}`,
+                        content: firstUserPayload.text
+                            ? `${systemPrompt}\n\n${firstUserPayload.text}${firstImagePlaceholder ? `\n${firstImagePlaceholder}` : ''}`
+                            : `${systemPrompt}${firstImagePlaceholder ? `\n${firstImagePlaceholder}` : ''}`,
                         modelId: codewhispererModel,
                         origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
                     }
-                });
+                };
+                if (firstUserPayload.images.length > 0) {
+                    firstHistoryMsg.userInputMessage.images = firstUserPayload.images;
+                }
+                history.push(firstHistoryMsg);
                 startIndex = 1; // Start processing from the second message
             } else {
                 // If the first message is not a user message, or if there's no initial user message,
@@ -1344,7 +1611,19 @@ async saveCredentialsToFile(filePath, newData) {
                     }
                     userInputMessage.userInputMessageContext = { toolResults: uniqueToolResults };
                 }
-                
+
+                // 兜底处理空 content（正常情况下空轮次已在合并前被过滤掉）：
+                // 有工具结果/图片时 Kiro 仍要求 content 非空，填入最小必要说明；否则整条跳过，不污染上下文。
+                if (!userInputMessage.content || userInputMessage.content.trim() === '') {
+                    if (toolResults.length > 0) {
+                        userInputMessage.content = 'Tool results provided.';
+                    } else if (userInputMessage.images && userInputMessage.images.length > 0) {
+                        userInputMessage.content = 'Image provided.';
+                    } else {
+                        continue;
+                    }
+                }
+
                 history.push({ userInputMessage });
             } else if (message.role === 'assistant') {
                 let assistantResponseMessage = {
@@ -1380,6 +1659,12 @@ async saveCredentialsToFile(filePath, newData) {
                 // 只添加非空字段
                 if (toolUses.length > 0) {
                     assistantResponseMessage.toolUses = toolUses;
+                }
+
+                // 兜底处理空 content（正常情况下空轮次已在合并前被过滤掉）：
+                // 只有工具调用时保留（content 允许为空），完全空的助手轮次则跳过，不用 "Continue" 污染。
+                if ((!assistantResponseMessage.content || assistantResponseMessage.content.trim() === '') && toolUses.length === 0) {
+                    continue;
                 }
 
                 history.push({ assistantResponseMessage });
@@ -1543,8 +1828,19 @@ async saveCredentialsToFile(filePath, newData) {
 
         request.conversationState.currentMessage.userInputMessage = userInputMessage;
 
-        if (this.authMethod === KIRO_CONSTANTS.AUTH_METHOD_SOCIAL) {
-            request.profileArn = this.profileArn;
+        const additionalModelRequestFields = buildKiroAdditionalModelRequestFields(
+            codewhispererModel,
+            thinking,
+            outputConfig,
+            reasoningEffort
+        );
+        if (additionalModelRequestFields) {
+            request.additionalModelRequestFields = additionalModelRequestFields;
+        }
+
+        const requestProfileArn = resolveKiroRequestProfileArn(this.authMethod, this.profileArn);
+        if (requestProfileArn != null) {
+            request.profileArn = requestProfileArn;
         }
 
         Object.defineProperty(request, '_kiroToolNameMaps', {
@@ -1578,6 +1874,8 @@ async saveCredentialsToFile(filePath, newData) {
         let fullContent = '';
         const toolCalls = [];
         let currentToolCallDict = null;
+        // 记录被忽略的占位工具调用 id（详见 KIRO_PLACEHOLDER_TOOL_NAME 说明）
+        const ignoredToolUseIds = new Set();
         // logger.info(`rawStr=${rawStr}`);
 
         // 改进的 SSE 事件解析：匹配 :message-typeevent 后面的 JSON 数据
@@ -1608,28 +1906,36 @@ async saveCredentialsToFile(filePath, newData) {
 
                     // 优先处理结构化工具调用事件
                     if (eventData.name && eventData.toolUseId) {
-                        if (!currentToolCallDict) {
-                            currentToolCallDict = {
-                                id: eventData.toolUseId,
-                                type: "function",
-                                function: {
-                                    name: toolNameMaps?.fromKiroName ? toolNameMaps.fromKiroName(eventData.name) : eventData.name,
-                                    arguments: ""
-                                }
-                            };
-                        }
-                        if (eventData.input) {
-                            currentToolCallDict.function.arguments += normalizeKiroToolInput(eventData.input);
-                        }
-                        if (eventData.stop) {
-                            try {
-                                const args = JSON.parse(currentToolCallDict.function.arguments);
-                                currentToolCallDict.function.arguments = JSON.stringify(args);
-                            } catch (e) {
-                                logger.warn(`[Kiro] Tool call arguments not valid JSON: ${currentToolCallDict.function.arguments}`);
+                        if (eventData.name === KIRO_PLACEHOLDER_TOOL_NAME || ignoredToolUseIds.has(eventData.toolUseId)) {
+                            // 占位工具调用：丢弃，不生成真实 tool_use
+                            if (!ignoredToolUseIds.has(eventData.toolUseId)) {
+                                logger.warn(`[Kiro] Model attempted to call placeholder tool '${KIRO_PLACEHOLDER_TOOL_NAME}'; dropping it (no real tools were available for this request).`);
+                                ignoredToolUseIds.add(eventData.toolUseId);
                             }
-                            toolCalls.push(currentToolCallDict);
-                            currentToolCallDict = null;
+                        } else {
+                            if (!currentToolCallDict) {
+                                currentToolCallDict = {
+                                    id: eventData.toolUseId,
+                                    type: "function",
+                                    function: {
+                                        name: toolNameMaps?.fromKiroName ? toolNameMaps.fromKiroName(eventData.name) : eventData.name,
+                                        arguments: ""
+                                    }
+                                };
+                            }
+                            if (eventData.input) {
+                                currentToolCallDict.function.arguments += normalizeKiroToolInput(eventData.input);
+                            }
+                            if (eventData.stop) {
+                                try {
+                                    const args = JSON.parse(currentToolCallDict.function.arguments);
+                                    currentToolCallDict.function.arguments = JSON.stringify(args);
+                                } catch (e) {
+                                    logger.warn(`[Kiro] Tool call arguments not valid JSON: ${currentToolCallDict.function.arguments}`);
+                                }
+                                toolCalls.push(currentToolCallDict);
+                                currentToolCallDict = null;
+                            }
                         }
                     } else if (!eventData.followupPrompt && eventData.content) {
                         // 处理内容，保留原始转义序列以便后续解析工具调用
@@ -1689,14 +1995,20 @@ async saveCredentialsToFile(filePath, newData) {
             throw new Error('No messages found in request body');
         }
 
-        const requestData = await this.buildCodewhispererRequest(messages, model, body.tools, body.system, body.thinking);
+        const requestData = await this.buildCodewhispererRequest(messages, model, body.tools, body.system, body.thinking, body.output_config, body.reasoning_effort);
 
         try {
             const token = this.accessToken; // Use the already initialized token
             const headers = {
                 'Authorization': `Bearer ${token}`,
                 'amz-sdk-invocation-id': `${uuidv4()}`,
+                'x-amz-target': 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
+                'x-amz-user-agent': 'aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererstreaming/0.1.17593 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI',
+                'user-agent': 'aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererstreaming/0.1.17593 os/linux lang/rust/1.92.0 md/appVersion-2.10.0 app/AmazonQ-For-CLI'
             };
+            if (token && (token.startsWith('ksk_') || (this.apiKey && token === this.apiKey))) {
+                headers['TokenType'] = 'API_KEY';
+            }
 
             // 当 model 以 kiro-amazonq 开头时，使用 amazonQUrl，否则使用 baseUrl
             const requestUrl = model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl;
@@ -1710,7 +2022,7 @@ async saveCredentialsToFile(filePath, newData) {
             const releaseThrottle = await acquireKiroRequestSlot(this.config);
             let response;
             try {
-                response = await this.axiosInstance.request(axiosConfig);
+                response = await this._requestWithBuilderEndpointRouting(axiosConfig, requestData);
             } finally {
                 releaseThrottle();
             }
@@ -1727,6 +2039,11 @@ async saveCredentialsToFile(filePath, newData) {
             // Handle 401 (Unauthorized) - refresh UUID first, then try to refresh token
             if (status === 401 && !isRetry) {
                 logger.info('[Kiro] Received 401. Refreshing UUID and triggering background refresh via PoolManager...');
+                await normalizeProviderErrorMessage(error, {
+                    status: 401,
+                    context: 'callApi',
+                    suffix: 'triggering auto-refresh'
+                });
                 
                 // 1. 先刷新 UUID
                 const newUuid = this._refreshUuid();
@@ -1761,6 +2078,7 @@ async saveCredentialsToFile(filePath, newData) {
             // Handle 429 (Too Many Requests) - wait baseDelay then switch credential
             if (status === 429) {
                 logger.info(`[Kiro] Received 429 (Too Many Requests). Waiting ${baseDelay}ms before switching credential...`);
+                await normalizeProviderErrorMessage(error, { status: 429, context: 'callApi' });
                 await new Promise(resolve => setTimeout(resolve, baseDelay));
                 // Mark error for credential switch without recording error count
                 error.shouldSwitchCredential = true;
@@ -1771,6 +2089,7 @@ async saveCredentialsToFile(filePath, newData) {
             // Handle 5xx server errors - wait baseDelay then switch credential
             if (status >= 500 && status < 600) {
                 logger.info(`[Kiro] Received ${status} server error. Waiting ${baseDelay}ms before switching credential...`);
+                await normalizeProviderErrorMessage(error, { status, context: 'callApi' });
                 await new Promise(resolve => setTimeout(resolve, baseDelay));
                 // Mark error for credential switch without recording error count
                 error.shouldSwitchCredential = true;
@@ -1787,32 +2106,19 @@ async saveCredentialsToFile(filePath, newData) {
                 return this.callApi(method, model, body, isRetry, retryCount + 1);
             }
 
-            if (error.response && error.response.data) { logger.error('[Kiro] 400 Response body:', typeof error.response.data === 'string' ? error.response.data.substring(0, 500) : JSON.stringify(error.response.data).substring(0, 500)); }
+            if (error.response && error.response.data) {
+                const responseBodyPreview = await getKiroErrorResponsePreview(error);
+                if (responseBodyPreview) {
+                    logger.error('[Kiro] Error response body:', responseBodyPreview);
+                }
+            }
             logger.error(`[Kiro] API call failed (Status: ${status}, Code: ${errorCode}):`, error.message);
             throw error;
         }
     }
 
-    _getErrorResponseText(error) {
-        const data = error?.response?.data;
-        if (data === undefined || data === null) {
-            return error?.message || '';
-        }
-        if (Buffer.isBuffer(data)) {
-            return data.toString('utf8');
-        }
-        if (typeof data === 'string') {
-            return data;
-        }
-        try {
-            return JSON.stringify(data);
-        } catch {
-            return String(data);
-        }
-    }
-
-    _isRefreshableForbidden(error) {
-        const text = this._getErrorResponseText(error).toLowerCase();
+    async _isRefreshableForbidden(error) {
+        const text = (await getNormalizedErrorResponseText(error)).toLowerCase();
         if (!text) return false;
 
         const nonRefreshablePatterns = [
@@ -1843,20 +2149,51 @@ async saveCredentialsToFile(filePath, newData) {
         return tokenRelated && refreshableAuthState;
     }
 
-    _handleForbiddenCredentialError(error, context) {
-        const responseText = this._getErrorResponseText(error);
+    async _handleForbiddenCredentialError(error, context) {
+        const responseText = await getNormalizedErrorResponseText(error);
+        await this._applyForbiddenCredentialState(error, context, responseText);
+    }
+
+    _buildForbiddenReason(context, responseText, tokenRelated = false) {
+        return buildHttpErrorReason(403, context, responseText, {
+            suffix: tokenRelated ? 'token-related' : ''
+        });
+    }
+
+    _buildNormalizedForbiddenError(error, responseText) {
         const responseSnippet = responseText ? responseText.substring(0, 500) : '';
 
+        if (responseSnippet) {
+            logger.warn(`[Kiro] 403 response body: ${responseSnippet}`);
+        }
+
+        return responseText ? {
+            ...error,
+            response: {
+                ...error?.response,
+                data: responseText
+            }
+        } : error;
+    }
+
+    async _applyForbiddenCredentialState(error, context, responseText) {
+        const responseSnippet = responseText ? responseText.substring(0, 500) : '';
         if (responseSnippet) {
             logger.warn(`[Kiro] 403 response body (${context}): ${responseSnippet}`);
         }
 
-        if (this._isRefreshableForbidden(error)) {
+        const normalizedError = this._buildNormalizedForbiddenError(error, responseText);
+
+        if (await this._isRefreshableForbidden(normalizedError)) {
+            const reason = this._buildForbiddenReason(context, responseText, true);
             logger.info(`[Kiro] Received token-related 403 in ${context}. Marking credential as needs refresh.`);
-            this._markCredentialNeedRefresh(`403 Forbidden (${context}) - token-related${responseSnippet ? `: ${responseSnippet}` : ''}`, error);
+            this._markCredentialNeedRefresh(reason, error);
+            error.message = reason;
         } else {
+            const reason = this._buildForbiddenReason(context, responseText, false);
             logger.info(`[Kiro] Received non-refreshable 403 in ${context}. Marking credential as unhealthy without refresh.`);
-            this._markCredentialUnhealthy(`403 Forbidden (${context})${responseSnippet ? `: ${responseSnippet}` : ''}`, error);
+            this._markCredentialUnhealthy(reason, error);
+            error.message = reason;
         }
     }
 
@@ -1977,20 +2314,30 @@ async saveCredentialsToFile(filePath, newData) {
      */
     async _handle402Error(error, context = 'unknown') {
         logger.info(`[Kiro] Received 402 (Quota Exceeded) in ${context}. Verifying usage limits...`);
+        const { reason: verifiedReason } = await normalizeProviderErrorMessage(error, {
+            status: 402,
+            context,
+            suffix: 'quota exceeded'
+        });
         try {
             // Verify usage limits to confirm quota exhaustion
             const usageLimits = await this.getUsageLimits();
-            const isQuotaExhausted = usageLimits?.usedCount >= usageLimits?.limitCount;
-            
-            logger.info(`[Kiro] Quota confirmed exhausted: ${usageLimits?.usedCount}/${usageLimits?.limitCount}`);
+            // 真实响应字段为 usageBreakdownList[].currentUsage / usageLimit
+            const breakdown = usageLimits?.usageBreakdownList?.[0];
+            logger.info(`[Kiro] Quota confirmed exhausted: ${breakdown?.currentUsage}/${breakdown?.usageLimit}`);
             // Calculate recovery time: 1st day of next month at 00:00:00 UTC
             const nextMonth = this._getNextMonthFirstDay();
-            this._markCredentialUnhealthyWithRecovery('402 Payment Required - Quota Exhausted', error, nextMonth);
+            this._markCredentialUnhealthyWithRecovery(verifiedReason, error, nextMonth);
         } catch (usageError) {
             logger.warn('[Kiro] Failed to verify usage limits:', usageError.message);
             // If we can't verify, still mark as unhealthy with recovery time
             const nextMonth = this._getNextMonthFirstDay();
-            this._markCredentialUnhealthyWithRecovery('402 Payment Required - Quota Exceeded (unverified)', error, nextMonth);
+            const { reason: fallbackReason } = await normalizeProviderErrorMessage(error, {
+                status: 402,
+                context,
+                suffix: 'quota exceeded (unverified)'
+            });
+            this._markCredentialUnhealthyWithRecovery(fallbackReason, error, nextMonth);
         }
         // Mark error for credential switch without recording error count
         error.shouldSwitchCredential = true;
@@ -2017,6 +2364,15 @@ async saveCredentialsToFile(filePath, newData) {
         if (rawBracketToolCalls) {
             //logger.info(`[Kiro] Found ${rawBracketToolCalls.length} bracket tool calls in raw response.`);
             allToolCalls.push(...restoreKiroToolCallNames(rawBracketToolCalls, toolNameMaps));
+        }
+
+        // 2.5. 兜底过滤：占位工具 no_tool_available 理论上只会走结构化事件分支（已在
+        // parseEventStreamChunk 中忽略），这里再兜底一次，防止它以 bracket 文本格式
+        // ("[Called no_tool_available with args: {}]") 漏网被当作真实工具调用转发出去。
+        const beforePlaceholderFilter = allToolCalls.length;
+        allToolCalls = allToolCalls.filter(tc => tc?.function?.name !== KIRO_PLACEHOLDER_TOOL_NAME);
+        if (allToolCalls.length !== beforePlaceholderFilter) {
+            logger.warn(`[Kiro] Dropped placeholder tool '${KIRO_PLACEHOLDER_TOOL_NAME}' call(s) from non-stream response (no real tools were available for this request).`);
         }
 
         // 3. Deduplicate all collected tool calls
@@ -2056,13 +2412,9 @@ async saveCredentialsToFile(filePath, newData) {
             delete requestBody._requestBaseUrl;
         }
         
-        // 检查 token 是否即将过期，如果是则推送到刷新队列
-        if (this.isExpiryDateNear()) {
-            logger.info('[Kiro] Token is near expiry, marking credential as need refresh...');
-            this._markCredentialNeedRefresh('Token near expiry in generateContent');
-        }
+        await this._prepareAccessTokenForRequest('generateContent');
         
-        const finalModel = MODEL_MAPPING[model] ? model : model;
+        const finalModel = resolveKiroModel(model, this.config);
         logger.info(`[Kiro] Calling generateContent with model: ${finalModel}`);
         
         // Estimate input tokens before making the API call
@@ -2072,6 +2424,12 @@ async saveCredentialsToFile(filePath, newData) {
 
         try {
             const { responseText, toolCalls } = this._processApiResponse(response);
+
+            if (responseText === '' && toolCalls.length === 0) {
+                logger.warn('[Kiro] Empty response detected in generateContent (no text/tool calls received from upstream); signalling for retry.');
+                throw createKiroEmptyResponseError();
+            }
+
             const thinkingType = requestBody?.thinking?.type;
             const thinkingRequested = typeof thinkingType === 'string' &&
                 (thinkingType.toLowerCase() === 'enabled' || thinkingType.toLowerCase() === 'adaptive');
@@ -2086,134 +2444,139 @@ async saveCredentialsToFile(filePath, newData) {
     }
 
     /**
-     * 解析 AWS Event Stream 格式，提取所有完整的 JSON 事件
-     * 返回 { events: 解析出的事件数组, remaining: 未处理完的缓冲区 }
+     * 按 AWS Event Stream 标准帧格式解析（基于 Buffer）。
+     * 帧格式: [4B totalLen][4B headersLen][4B preludeCRC][headers][payload][4B msgCRC]
+     * 相比旧的 indexOf('{') shape-based 解析，这里按 totalLen 精确切帧，
+     * 不会被帧头二进制里的 { 字节误导，彻底解决分片边界导致的卡死。
+     * 输入 buffer 为 Buffer；返回 { events, remaining:Buffer }，events 格式与旧解析器一致。
      */
     parseAwsEventStreamBuffer(buffer) {
         const events = [];
-        let remaining = buffer;
-        let searchStart = 0;
-        
+        let offset = 0;
+
         while (true) {
-            // 查找真正的 JSON payload 起始位置。AWS Event Stream 包含二进制头部，
-            // payload 对象里的 key 顺序不稳定，所以不能依赖 {"input": 这类固定开头。
-            const jsonStart = remaining.indexOf('{', searchStart);
-            if (jsonStart < 0) break;
-            
-            // 正确处理嵌套的 {} - 使用括号计数法
-            let braceCount = 0;
-            let jsonEnd = -1;
-            let inString = false;
-            let escapeNext = false;
-            
-            for (let i = jsonStart; i < remaining.length; i++) {
-                const char = remaining[i];
-                
-                if (escapeNext) {
-                    escapeNext = false;
-                    continue;
-                }
-                
-                if (char === '\\') {
-                    escapeNext = true;
-                    continue;
-                }
-                
-                if (char === '"') {
-                    inString = !inString;
-                    continue;
-                }
-                
-                if (!inString) {
-                    if (char === '{') {
-                        braceCount++;
-                    } else if (char === '}') {
-                        braceCount--;
-                        if (braceCount === 0) {
-                            jsonEnd = i;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            if (jsonEnd < 0) {
-                // 不完整的 JSON，保留在缓冲区等待更多数据
-                remaining = remaining.substring(jsonStart);
-                break;
-            }
-            
-            const jsonStr = remaining.substring(jsonStart, jsonEnd + 1);
-            try {
-                const parsed = JSON.parse(jsonStr);
-                // 处理 content 事件
-                if (parsed.content !== undefined && !parsed.followupPrompt) {
-                    // 处理转义字符
-                    let decodedContent = parsed.content;
-                    // 无须处理转义的换行符，原来要处理是因为智能体返回的 content 需要通过换行符切割不同的json
-                    // decodedContent = decodedContent.replace(/(?<!\\)\\n/g, '\n');
-                    events.push({ type: 'content', data: decodedContent });
-                }
-                // 处理结构化工具调用事件 - 开始事件（包含 name 和 toolUseId）
-                else if (parsed.name && parsed.toolUseId) {
-                    events.push({ 
-                        type: 'toolUse', 
-                        data: {
-                            name: parsed.name,
-                            toolUseId: parsed.toolUseId,
-                            input: normalizeKiroToolInput(parsed.input),
-                            stop: parsed.stop || false
-                        }
-                    });
-                }
-                // 处理工具调用的 input 续传事件（可能包含 toolUseId，且 key 顺序不固定）
-                else if (parsed.input !== undefined && !parsed.name) {
-                    events.push({
-                        type: 'toolUseInput',
-                        data: {
-                            toolUseId: parsed.toolUseId,
-                            input: normalizeKiroToolInput(parsed.input)
-                        }
-                    });
-                }
-                // 处理工具调用的结束事件（只有 stop 字段，且不包含 contextUsagePercentage）
-                else if (parsed.stop !== undefined && parsed.contextUsagePercentage === undefined) {
-                    events.push({
-                        type: 'toolUseStop',
-                        data: {
-                            stop: parsed.stop
-                        }
-                    });
-                }
-                // 处理上下文使用百分比事件（最后一条消息）
-                else if (parsed.contextUsagePercentage !== undefined) {
-                    events.push({
-                        type: 'contextUsage',
-                        data: {
-                            contextUsagePercentage: parsed.contextUsagePercentage
-                        }
-                    });
-                }
-            } catch (e) {
-                // JSON 解析失败，跳过这个 "{" 继续搜索，避免二进制头部中的偶然字符阻塞后续 payload
-                searchStart = jsonStart + 1;
+            // 不足一个 prelude(12B)
+            if (buffer.length - offset < 12) break;
+
+            const totalLen = buffer.readUInt32BE(offset);
+            const headersLen = buffer.readUInt32BE(offset + 4);
+
+            // 帧头合法性检查：非法则丢一字节重新同步（容错）
+            if (totalLen < 16 || totalLen > 16 * 1024 * 1024 ||
+                headersLen > totalLen - 16) {
+                offset += 1;
                 continue;
             }
-            
-            searchStart = jsonEnd + 1;
-            if (searchStart >= remaining.length) {
-                remaining = '';
-                break;
+
+            // 整帧未到齐，等下一个 chunk（处理分片）
+            if (buffer.length - offset < totalLen) break;
+
+            const frameStart = offset;
+            const headersStart = frameStart + 12;
+            const payloadStart = headersStart + headersLen;
+            const payloadEnd = frameStart + totalLen - 4; // 末4字节是 msg CRC
+
+            // 从帧头读取权威的 :event-type（type-based 分发的依据）
+            const eventType = this._readEventTypeHeader(buffer, headersStart, headersLen);
+            const payloadStr = buffer.slice(payloadStart, payloadEnd).toString('utf8');
+            offset += totalLen; // 消费这一帧
+
+            let parsed;
+            try {
+                parsed = JSON.parse(payloadStr);
+            } catch (e) {
+                // payload 非法 JSON（理论上不应发生），跳过该帧
+                logger.warn('[Kiro] Frame payload not valid JSON, skipped: ' + payloadStr.slice(0, 120));
+                continue;
+            }
+
+            // 事件分类：优先按上游声明的 :event-type 分发（type-based）。
+            switch (eventType) {
+                case 'assistantResponseEvent':
+                    if (parsed.content !== undefined && !parsed.followupPrompt) {
+                        events.push({ type: 'content', data: parsed.content });
+                    }
+                    break;
+                case 'reasoningContentEvent':
+                    // 思考流，payload 为 {"text":"..."}
+                    if (parsed.text !== undefined) {
+                        events.push({ type: 'reasoning', data: parsed.text });
+                    }
+                    break;
+                case 'toolUseEvent':
+                    // 工具调用：同一个 event-type 下含开始/续传/结束三种，按 payload 字段区分
+                    if (parsed.name && parsed.toolUseId) {
+                        events.push({
+                            type: 'toolUse',
+                            data: {
+                                name: parsed.name,
+                                toolUseId: parsed.toolUseId,
+                                input: normalizeKiroToolInput(parsed.input),
+                                stop: parsed.stop || false
+                            }
+                        });
+                    } else if (parsed.input !== undefined && !parsed.name) {
+                        events.push({
+                            type: 'toolUseInput',
+                            data: {
+                                toolUseId: parsed.toolUseId,
+                                input: normalizeKiroToolInput(parsed.input)
+                            }
+                        });
+                    } else if (parsed.stop !== undefined) {
+                        events.push({ type: 'toolUseStop', data: { stop: parsed.stop } });
+                    }
+                    break;
+                default:
+                    // 无 event-type 头或未知类型：回退到基于 payload 字段的判断（兼容性兵底）。
+                    if (parsed.contextUsagePercentage !== undefined) {
+                        events.push({ type: 'contextUsage', data: { contextUsagePercentage: parsed.contextUsagePercentage } });
+                    } else if (parsed.content !== undefined && !parsed.followupPrompt) {
+                        events.push({ type: 'content', data: parsed.content });
+                    } else if (parsed.text !== undefined) {
+                        events.push({ type: 'reasoning', data: parsed.text });
+                    } else if (parsed.name && parsed.toolUseId) {
+                        events.push({ type: 'toolUse', data: { name: parsed.name, toolUseId: parsed.toolUseId, input: normalizeKiroToolInput(parsed.input), stop: parsed.stop || false } });
+                    } else if (parsed.input !== undefined && !parsed.name) {
+                        events.push({ type: 'toolUseInput', data: { toolUseId: parsed.toolUseId, input: normalizeKiroToolInput(parsed.input) } });
+                    } else if (parsed.stop !== undefined) {
+                        events.push({ type: 'toolUseStop', data: { stop: parsed.stop } });
+                    }
+                    // {"signature":...} 签名事件、metering 等无内容意义的类型：静默忽略
+                    break;
             }
         }
-        
-        // 如果 searchStart 有进展，截取剩余部分
-        if (searchStart > 0 && remaining.length > 0) {
-            remaining = remaining.substring(searchStart);
-        }
-        
-        return { events, remaining };
+
+        return { events, remaining: buffer.slice(offset) };
     }
+
+    /**
+     * 从 AWS Event Stream 帧的 headers 区读取 :event-type 的值。
+     * header 格式: [1B nameLen][name][1B valueType][...]，string 类型(7) 为 [2B valueLen][value]。
+     * 解析失败或无此头时返回 null（调用方会回退到 payload 字段判断）。
+     */
+    _readEventTypeHeader(buffer, start, headersLen) {
+        try {
+            let p = start;
+            const end = start + headersLen;
+            while (p < end) {
+                const nameLen = buffer.readUInt8(p); p += 1;
+                const name = buffer.slice(p, p + nameLen).toString('utf8'); p += nameLen;
+                const valueType = buffer.readUInt8(p); p += 1;
+                if (valueType === 7) {
+                    // string: [2B len][value]
+                    const valueLen = buffer.readUInt16BE(p); p += 2;
+                    const value = buffer.slice(p, p + valueLen).toString('utf8'); p += valueLen;
+                    if (name === ':event-type') return value;
+                } else {
+                    // 遇到非 string 类型的头（kiro 帧头均为 string），为安全起见中断
+                    break;
+                }
+            }
+        } catch (e) { /* 解析失败回退 */ }
+        return null;
+    }
+
 
     /**
      * 真正的流式 API 调用 - 使用 responseType: 'stream'
@@ -2237,19 +2600,28 @@ async saveCredentialsToFile(filePath, newData) {
             throw new Error('No messages found in request body');
         }
 
-        const requestData = await this.buildCodewhispererRequest(messages, model, body.tools, body.system, body.thinking);
+        const requestData = await this.buildCodewhispererRequest(messages, model, body.tools, body.system, body.thinking, body.output_config, body.reasoning_effort);
         const toolNameMaps = requestData._kiroToolNameMaps;
 
         const token = this.accessToken;
         const headers = {
             'Authorization': `Bearer ${token}`,
             'amz-sdk-invocation-id': `${uuidv4()}`,
+            'x-amz-target': 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
+            'x-amz-user-agent': 'aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererstreaming/0.1.17593 os/linux lang/rust/1.92.0 m/F app/AmazonQ-For-CLI',
+            'user-agent': 'aws-sdk-rust/1.3.15 ua/2.1 api/codewhispererstreaming/0.1.17593 os/linux lang/rust/1.92.0 md/appVersion-2.10.0 app/AmazonQ-For-CLI'
         };
+        if (token && (token.startsWith('ksk_') || (this.apiKey && token === this.apiKey))) {
+            headers['TokenType'] = 'API_KEY';
+        }
 
         const requestUrl = model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl;
 
         let stream = null;
         let releaseThrottle = () => {};
+        // catch 需要根据该状态判断能否安全地从头重试，因此必须与 try/catch 同级。
+        // 一旦产出过内容，流中途断线就不能重发（会导致内容重复/错位）。
+        let hasYieldedContent = false;
         try {
             const axiosConfig = {
                 method: 'post',
@@ -2260,16 +2632,17 @@ async saveCredentialsToFile(filePath, newData) {
             };
             this._applySidecar(axiosConfig);
             releaseThrottle = await acquireKiroRequestSlot(this.config);
-            const response = await this.axiosInstance.request(axiosConfig);
+            const response = await this._requestWithBuilderEndpointRouting(axiosConfig, requestData);
 
             stream = response.data;
-            let buffer = '';
+            let buffer = Buffer.alloc(0);
             let lastContentEvent = null;  // 用于检测连续重复的 content 事件
 
             for await (const chunk of stream) {
-                buffer += chunk.toString();
+                const chunkBuf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                buffer = buffer.length === 0 ? chunkBuf : Buffer.concat([buffer, chunkBuf]);
                 
-                // 解析缓冲区中的事件
+                // 按 AWS 标准帧格式解析缓冲区中的事件
                 const { events, remaining } = this.parseAwsEventStreamBuffer(buffer);
                 buffer = remaining;
                 
@@ -2282,14 +2655,20 @@ async saveCredentialsToFile(filePath, newData) {
                             continue;
                         }
                         lastContentEvent = event.data;
+                        hasYieldedContent = true;
                         yield { type: 'content', content: event.data };
+                    } else if (event.type === 'reasoning') {
+                        hasYieldedContent = true;
+                        yield { type: 'reasoning', reasoning: event.data };
                     } else if (event.type === 'toolUse') {
+                        hasYieldedContent = true;
                         const toolUse = {
                             ...event.data,
                             name: toolNameMaps?.fromKiroName ? toolNameMaps.fromKiroName(event.data?.name) : event.data?.name
                         };
                         yield { type: 'toolUse', toolUse };
                     } else if (event.type === 'toolUseInput') {
+                        hasYieldedContent = true;
                         yield { type: 'toolUseInput', input: event.data.input };
                     } else if (event.type === 'toolUseStop') {
                         yield { type: 'toolUseStop', stop: event.data.stop };
@@ -2314,6 +2693,11 @@ async saveCredentialsToFile(filePath, newData) {
             // Handle 401 (Unauthorized) - try to refresh token first
             if (status === 401 && !isRetry) {
                 logger.info('[Kiro] Received 401 in stream. Triggering background refresh via PoolManager...');
+                await normalizeProviderErrorMessage(error, {
+                    status: 401,
+                    context: 'stream',
+                    suffix: 'triggering auto-refresh'
+                });
                 
                 // 1. 先刷新 UUID
                 const newUuid = this._refreshUuid();
@@ -2337,7 +2721,7 @@ async saveCredentialsToFile(filePath, newData) {
             // Handle 403 (Forbidden). Most Kiro 403s are account/policy/quota/profile issues,
             // not expired access tokens, so do not blindly refresh.
             if (status === 403 && !isRetry) {
-                this._handleForbiddenCredentialError(error, 'stream');
+                await this._handleForbiddenCredentialError(error, 'stream');
                 // Mark error for credential switch without recording error count
                 error.shouldSwitchCredential = true;
                 error.skipErrorCount = true;
@@ -2347,6 +2731,7 @@ async saveCredentialsToFile(filePath, newData) {
             // Handle 429 (Too Many Requests) - wait baseDelay then switch credential
             if (status === 429) {
                 logger.info(`[Kiro] Received 429 (Too Many Requests) in stream. Waiting ${baseDelay}ms before switching credential...`);
+                await normalizeProviderErrorMessage(error, { status: 429, context: 'stream' });
                 await new Promise(resolve => setTimeout(resolve, baseDelay));
                 // Mark error for credential switch without recording error count
                 error.shouldSwitchCredential = true;
@@ -2357,6 +2742,7 @@ async saveCredentialsToFile(filePath, newData) {
             // Handle 5xx server errors - wait baseDelay then switch credential
             if (status >= 500 && status < 600) {
                 logger.info(`[Kiro] Received ${status} server error in stream. Waiting ${baseDelay}ms before switching credential...`);
+                await normalizeProviderErrorMessage(error, { status, context: 'stream' });
                 await new Promise(resolve => setTimeout(resolve, baseDelay));
                 // Mark error for credential switch without recording error count
                 error.shouldSwitchCredential = true;
@@ -2365,7 +2751,9 @@ async saveCredentialsToFile(filePath, newData) {
             }
 
             // Handle network errors (ECONNRESET, ETIMEDOUT, etc.) with exponential backoff
-            if (isNetworkError && retryCount < maxRetries) {
+            // 只在尚未产出任何内容时才从头重试：若已经 yield 过内容，
+            // 从头重发会导致已发送部分与重试响应重复/错位，故中途断线不重试。
+            if (isNetworkError && retryCount < maxRetries && !hasYieldedContent) {
                 const delay = baseDelay * Math.pow(2, retryCount);
                 const errorIdentifier = errorCode || errorMessage.substring(0, 50);
                 logger.info(`[Kiro] Network error (${errorIdentifier}) in stream. Retrying in ${delay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
@@ -2373,7 +2761,16 @@ async saveCredentialsToFile(filePath, newData) {
                 yield* this.streamApiReal(method, model, body, isRetry, retryCount + 1);
                 return;
             }
+            if (isNetworkError && hasYieldedContent) {
+                logger.warn(`[Kiro] Network error (${errorCode || 'stream'}) after content already sent; not retrying to avoid duplication. Ending stream.`);
+            }
 
+            if (error.response && error.response.data) {
+                const responseBodyPreview = await getKiroErrorResponsePreview(error);
+                if (responseBodyPreview) {
+                    logger.error('[Kiro] Stream error response body:', responseBodyPreview);
+                }
+            }
             logger.error(`[Kiro] Stream API call failed (Status: ${status}, Code: ${errorCode}):`,  error.message);
             throw error;
         } finally {
@@ -2395,8 +2792,13 @@ async saveCredentialsToFile(filePath, newData) {
         }
     }
 
-    // 真正的流式传输实现
-    async * generateContentStream(model, requestBody) {
+    // 真正的流式传输实现（内部原始生成器：立即产出 message_start，随后产出实时事件）
+    //
+    // 注意：这个方法本身不对外暴露——对外的 generateContentStream 是下面的薄包装，
+    // 它会缓存这里第一次产出的 message_start，直到确认收到过至少一个有意义的事件
+    // （文本/工具调用/思考）才真正转发给调用方。这样即使这里在流结束前检测到
+    // 完全空的响应并抛错，调用方也从未收到过任何数据，可以安全地整体重试。
+    async * _generateContentStreamRaw(model, requestBody) {
         if (!this.isInitialized) await this.initialize();
 
         // 临时存储 monitorRequestId
@@ -2408,13 +2810,9 @@ async saveCredentialsToFile(filePath, newData) {
             delete requestBody._requestBaseUrl;
         }
         
-        // 检查 token 是否即将过期，如果是则推送到刷新队列
-        if (this.isExpiryDateNear()) {
-            logger.info('[Kiro] Token is near expiry, marking credential as need refresh...');
-            this._markCredentialNeedRefresh('Token near expiry in generateContentStream');
-        }
+        await this._prepareAccessTokenForRequest('generateContentStream');
         
-        const finalModel = MODEL_MAPPING[model] ? model : model;
+        const finalModel = resolveKiroModel(model, this.config);
         logger.info(`[Kiro] Calling generateContentStream with model: ${finalModel} (real streaming)`);
 
         let inputTokens = 0;
@@ -2443,7 +2841,8 @@ async saveCredentialsToFile(filePath, newData) {
 
         const ensureBlockStart = (blockType) => {
             if (blockType === 'thinking') {
-                if (streamState.thinkingBlockIndex != null) return [];
+                if (streamState.thinkingBlockIndex != null &&
+                    !streamState.stoppedBlocks.has(streamState.thinkingBlockIndex)) return [];
                 const idx = streamState.nextBlockIndex++;
                 streamState.thinkingBlockIndex = idx;
                 return [{
@@ -2453,7 +2852,8 @@ async saveCredentialsToFile(filePath, newData) {
                 }];
             }
             if (blockType === 'text') {
-                if (streamState.textBlockIndex != null) return [];
+                if (streamState.textBlockIndex != null &&
+                    !streamState.stoppedBlocks.has(streamState.textBlockIndex)) return [];
                 const idx = streamState.nextBlockIndex++;
                 streamState.textBlockIndex = idx;
                 return [{
@@ -2478,6 +2878,8 @@ async saveCredentialsToFile(filePath, newData) {
                 streamState.hasVisibleText = true;
             }
             const events = [];
+            // Anthropic 内容块不能重叠；正文开始前先关闭仍处于打开状态的思考块。
+            events.push(...stopBlock(streamState.thinkingBlockIndex));
             events.push(...ensureBlockStart('text'));
             // 将转义的换行符转换为真实换行符，确保流式输出显示正常
             const decodedText = text.replace(/(?<!\\)\\n/g, '\n');
@@ -2494,6 +2896,8 @@ async saveCredentialsToFile(filePath, newData) {
                 streamState.hasThinkingContent = true;
             }
             const events = [];
+            // 兼容内联 <thinking> 出现在正文后的情况，保证任一时刻只有一个内容块打开。
+            events.push(...stopBlock(streamState.textBlockIndex));
             events.push(...ensureBlockStart('thinking'));
             // 将转义的换行符转换为真实换行符
             const decodedThinking = thinking.replace(/(?<!\\)\\n/g, '\n');
@@ -2517,6 +2921,8 @@ async saveCredentialsToFile(filePath, newData) {
             const toolCalls = [];
             let currentToolCall = null; // 用于累积结构化工具调用
             const toolUseBlockIndexes = new Map(); // toolUseId -> content block index
+            // 记录被忽略的占位工具调用 id（详见 KIRO_PLACEHOLDER_TOOL_NAME 说明）
+            const ignoredToolUseIds = new Set();
 
             const estimatedInputTokens = this.estimateInputTokens(requestBody);
 
@@ -2543,6 +2949,12 @@ async saveCredentialsToFile(filePath, newData) {
                 if (event.type === 'contextUsage' && event.contextUsagePercentage) {
                     // 捕获上下文使用百分比（包含输入和输出的总使用量）
                     contextUsagePercentage = event.contextUsagePercentage;
+                } else if (event.type === 'reasoning' && event.reasoning) {
+                    // 原生 reasoning 流（reasoningContentEvent）：直接走 thinking 输出通道，
+                    // 不经过 <thinking> 标签扫描（新模型的思考不再内联在 content 标签里）。
+                    totalContent += event.reasoning;
+                    yield* pushEvents(createThinkingDeltaEvents(event.reasoning));
+                    continue;
                 } else if (event.type === 'content' && event.content) {
                     totalContent += event.content;
 
@@ -2659,6 +3071,17 @@ async saveCredentialsToFile(filePath, newData) {
                     yield* pushEvents(events);
                 } else if (event.type === 'toolUse') {
                     const tc = event.toolUse;
+
+                    // 占位工具 no_tool_available 被"调用"：整条丢弃，不生成任何 tool_use 内容块，
+                    // 也不计入 totalContent，避免把这个空操作工具调用转发给客户端导致本轮无实质输出。
+                    if (tc.name === KIRO_PLACEHOLDER_TOOL_NAME || (tc.toolUseId && ignoredToolUseIds.has(tc.toolUseId))) {
+                        if (tc.toolUseId && !ignoredToolUseIds.has(tc.toolUseId)) {
+                            logger.warn(`[Kiro] Model attempted to call placeholder tool '${KIRO_PLACEHOLDER_TOOL_NAME}'; dropping it (no real tools were available for this request).`);
+                            ignoredToolUseIds.add(tc.toolUseId);
+                        }
+                        continue;
+                    }
+
                     const toolEvents = [];
 
                     // 统计工具调用的内容到 totalContent（用于 token 计算）
@@ -2667,8 +3090,9 @@ async saveCredentialsToFile(filePath, newData) {
 
                     // 工具调用事件（包含 name 和 toolUseId）
                     if (tc.name && tc.toolUseId) {
-                        // 遇到工具调用时，立即关闭文本块，避免前端等待到流结束才看到 content_block_stop
+                        // 工具块开始前关闭当前文本/思考块，避免 Anthropic 内容块重叠。
                         toolEvents.push(...stopBlock(streamState.textBlockIndex));
+                        toolEvents.push(...stopBlock(streamState.thinkingBlockIndex));
 
                         // 同一工具调用续传
                         if (currentToolCall && currentToolCall.toolUseId === tc.toolUseId) {
@@ -2856,6 +3280,10 @@ async saveCredentialsToFile(filePath, newData) {
                 streamState.buffer = '';
             }
 
+            // 原生 reasoningContentEvent 没有 </thinking> 标签；流尾必须显式关闭其 thinking 块。
+            // 若接下来需要为纯思考响应补最小文本块，也要先完成这个 stop。
+            yield* pushEvents(stopBlock(streamState.thinkingBlockIndex));
+
             const emittedOnlyThinking = thinkingRequested &&
                 streamState.hasThinkingContent &&
                 !streamState.hasVisibleText &&
@@ -2863,6 +3291,13 @@ async saveCredentialsToFile(filePath, newData) {
             if (emittedOnlyThinking) {
                 logger.warn('[Kiro Stream] Thinking-only response received; emitting minimal text block and max_tokens stop_reason');
                 yield* pushEvents(createTextDeltaEvents(' '));
+            }
+
+            // 真正的空响应：没有文本、没有工具调用、也没有思考内容——Kiro 上游静默地什么都没生成。
+            // 不再伪造一次成功的 end_turn，而是抛出可重试的错误，交给上层的凭证切换重试逻辑处理。
+            if (totalContent === '' && toolCalls.length === 0 && !emittedOnlyThinking) {
+                logger.warn('[Kiro Stream] Empty response detected (no content/toolUse/thinking events received from upstream); signalling for retry.');
+                throw createKiroEmptyResponseError();
             }
 
             yield* pushEvents(stopBlock(streamState.textBlockIndex));
@@ -2924,8 +3359,44 @@ async saveCredentialsToFile(filePath, newData) {
             yield { type: "message_stop" };
 
         } catch (error) {
-            logger.error('[Kiro] Error in streaming generation:', error);
+            if (!error.isEmptyUpstreamResponse) {
+                logger.error('[Kiro] Error in streaming generation:', error?.stack || error?.message || String(error));
+            }
             throw error;
+        }
+    }
+
+    // 对外暴露的流式生成入口：包装 _generateContentStreamRaw，缓存其第一个产出的
+    // message_start 事件，直到确认后续确实产出过内容才转发出去。
+    //
+    // 效果：
+    // - 正常有内容的响应：几乎零延迟地把 message_start 和第一个真实事件一起放行，
+    //   真实流式体验不受影响。
+    // - 完全空的响应：_generateContentStreamRaw 在结束前会抛出
+    //   isEmptyUpstreamResponse 错误而不产出第二个事件；此时 message_start 从未被
+    //   转发给调用方，调用方（handleStreamRequest）尚未向客户端写入任何数据，
+    //   可以安全地整体重试（不会出现同一个 SSE 响应里出现两个 message_start）。
+    async * generateContentStream(model, requestBody) {
+        const rawGenerator = this._generateContentStreamRaw(model, requestBody);
+
+        const first = await rawGenerator.next();
+        if (first.done) {
+            return;
+        }
+
+        // first.value 预期是 message_start；先缓存，等确认有后续真实事件再一起放行。
+        const pendingMessageStart = first.value;
+        let flushedMessageStart = false;
+
+        while (true) {
+            const { value, done } = await rawGenerator.next();
+            if (done) break;
+
+            if (!flushedMessageStart) {
+                yield pendingMessageStart;
+                flushedMessageStart = true;
+            }
+            yield value;
         }
     }
 
@@ -3169,13 +3640,28 @@ async saveCredentialsToFile(filePath, newData) {
         try {
             if (!this.expiresAt) return true;
             const expirationTime = new Date(this.expiresAt);
+            const expirationMs = expirationTime.getTime();
+            if (!Number.isFinite(expirationMs)) return true;
             const currentTime = new Date();
             // 给 30 秒缓冲，避免请求过程中过期
             const bufferMs = 30 * 1000;
-            return expirationTime.getTime() <= (currentTime.getTime() + bufferMs);
+            return expirationMs <= (currentTime.getTime() + bufferMs);
         } catch (error) {
             logger.error(`[Kiro] Error checking token expiry: ${error.message}`);
             return true; // Treat as expired if parsing fails
+        }
+    }
+
+    async _prepareAccessTokenForRequest(context) {
+        if (this.isTokenExpired()) {
+            logger.info(`[Kiro] Token expired before ${context}, refreshing synchronously...`);
+            await this.initializeAuth(true);
+            return;
+        }
+
+        if (this.isExpiryDateNear()) {
+            logger.info('[Kiro] Token is near expiry, marking credential as need refresh...');
+            this._markCredentialNeedRefresh(`Token near expiry in ${context}`);
         }
     }
 
@@ -3248,7 +3734,7 @@ async saveCredentialsToFile(filePath, newData) {
             origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
             resourceType: resourceType
         });
-         if (this.authMethod === KIRO_CONSTANTS.AUTH_METHOD_SOCIAL && this.profileArn) {
+        if (this.profileArn) {
             params.append('profileArn', this.profileArn);
         }
         const fullUrl = `${usageLimitsUrl}?${params.toString()}`;
@@ -3270,6 +3756,9 @@ async saveCredentialsToFile(filePath, newData) {
             'amz-sdk-request': 'attempt=1; max=1',
             'Connection': 'close'
         };
+        if (this.accessToken && (this.accessToken.startsWith('ksk_') || (this.apiKey && this.accessToken === this.apiKey))) {
+            headers['TokenType'] = 'API_KEY';
+        }
 
         const axiosConfig = {
             method: 'get',

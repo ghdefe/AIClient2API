@@ -12,6 +12,7 @@ import { generateUUID, createProviderConfig, formatSystemPath, detectProviderFro
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, getServiceAdapter, invalidateServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
+import { normalizeProviderConfigFields } from '../utils/provider-config-normalizer.js';
 
 
 
@@ -32,9 +33,9 @@ function sanitizeProviderData(provider, maskSensitive = false) {
             const val = sanitized[key];
             if (typeof val !== 'string' || !val) continue;
 
-            // 识别敏感字段：包含 KEY, TOKEN, SSO, SECRET, PASSWORD, CLEARANCE 等关键词
+            // 识别敏感字段：包含 KEY, TOKEN, SSO, SECRET, PASSWORD, CLEARANCE, BM, STATSIG_ID 等关键词
             // 同时排除包含 PATH, URL, DIR, ENDPOINT 等关键词的路径/地址字段
-            const isSensitive = /API_KEY|TOKEN|SSO|SECRET|PASSWORD|CLEARANCE|ACCESS_KEY|credentials/i.test(key);
+            const isSensitive = /API_KEY|TOKEN|SSO|SECRET|PASSWORD|CLEARANCE|ACCESS_KEY|credentials|BM|STATSIG_ID/i.test(key);
             const isPath = /PATH|URL|DIR|ENDPOINT|REGION/i.test(key);
 
             if (isSensitive && !isPath) {
@@ -400,7 +401,7 @@ export async function handleDetectProviderModels(req, res, currentConfig, provid
         }
 
         const body = await getRequestBody(req);
-        const draftConfig = filterMaskedData(body?.providerConfig || {});
+        const draftConfig = normalizeProviderConfigFields(filterMaskedData(body?.providerConfig || {}));
 
         const providerPools = loadProviderPools(currentConfig, providerPoolManager);
         const providers = providerPools[providerType] || [];
@@ -503,7 +504,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager, 
         }
         
         // 过滤掉脱敏字段
-        const filteredConfig = filterMaskedData(providerConfig);
+        const filteredConfig = normalizeProviderConfigFields(filterMaskedData(providerConfig));
         if (usesManagedModelList(providerType)) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
             filteredConfig.notSupportedModels = [];
@@ -605,7 +606,7 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
         const existingProvider = providers[providerIndex];
         
         // 过滤掉传入配置中的脱敏占位符，避免覆盖真实数据
-        const filteredConfig = filterMaskedData(providerConfig);
+        const filteredConfig = normalizeProviderConfigFields(filterMaskedData(providerConfig));
         if (usesManagedModelList(providerType)) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
             filteredConfig.notSupportedModels = [];

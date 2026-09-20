@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { isUIApiPath } from '../utils/ui-utils.js';
+import { getPluginManager } from '../core/plugin-manager.js';
+import { resolvePluginStaticFile } from '../core/plugin-security.js';
 
 // Import UI modules
 import * as auth from '../ui-modules/auth.js';
@@ -26,7 +28,17 @@ export { broadcastEvent, initializeUIManagement, handleUploadOAuthCredentials, u
  * @param {http.ServerResponse} res - The HTTP response object
  */
 export async function serveStaticFiles(pathParam, res) {
-    const filePath = path.join(process.cwd(), 'static', pathParam === '/' || pathParam === '/index.html' ? 'index.html' : pathParam.replace('/static/', ''));
+    // 1. 尝试从系统 static 目录服务
+    let filePath = path.join(process.cwd(), 'static', pathParam === '/' || pathParam === '/index.html' ? 'index.html' : pathParam.replace('/static/', ''));
+
+    if (!existsSync(filePath)) {
+        // 2. 尝试从插件目录服务
+        const pluginManager = getPluginManager();
+        const plugin = pluginManager.getPluginByStaticPath(pathParam);
+        if (plugin && plugin._baseDir) {
+            filePath = resolvePluginStaticFile(plugin, pathParam);
+        }
+    }
 
     if (existsSync(filePath)) {
         const ext = path.extname(filePath);
@@ -314,6 +326,14 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await usageApi.handleGetUsage(req, res, currentConfig, providerPoolManager);
     }
 
+    // Reset usage quota for a specific provider instance
+    const usageResetInstanceMatch = pathParam.match(/^\/api\/usage\/([^\/]+)\/([^\/]+)\/reset$/);
+    if (method === 'POST' && usageResetInstanceMatch) {
+        const providerType = decodeURIComponent(usageResetInstanceMatch[1]);
+        const providerUuid = decodeURIComponent(usageResetInstanceMatch[2]);
+        return await usageApi.handleResetSingleInstanceUsage(req, res, currentConfig, providerPoolManager, providerType, providerUuid);
+    }
+
     // Get supported providers for usage query
     if (method === 'GET' && pathParam === '/api/usage/supported-providers') {
         return await usageApi.handleGetSupportedProviders(req, res);
@@ -324,6 +344,14 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
     if (method === 'GET' && usageProviderMatch) {
         const providerType = decodeURIComponent(usageProviderMatch[1]);
         return await usageApi.handleGetProviderUsage(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
+    // Get usage limits for a specific provider instance
+    const usageInstanceMatch = pathParam.match(/^\/api\/usage\/([^\/]+)\/([^\/]+)$/);
+    if (method === 'GET' && usageInstanceMatch) {
+        const providerType = decodeURIComponent(usageInstanceMatch[1]);
+        const providerUuid = decodeURIComponent(usageInstanceMatch[2]);
+        return await usageApi.handleGetSingleInstanceUsage(req, res, currentConfig, providerPoolManager, providerType, providerUuid);
     }
 
     // Check for updates - compare local VERSION with latest git tag
@@ -396,6 +424,14 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await oauthApi.handleBatchImportCodexTokens(req, res);
     }
 
+    if (method === 'POST' && pathParam === '/api/grok-cli/batch-import-tokens') {
+        return await oauthApi.handleBatchImportGrokCliTokens(req, res);
+    }
+
+    if (method === 'POST' && pathParam === '/api/codex/import-external-credentials') {
+        return await oauthApi.handleImportCodexExternalCredentials(req, res);
+    }
+
     if (method === 'POST' && pathParam === '/api/grok/batch-import-tokens') {
         return await oauthApi.handleBatchImportGrokTokens(req, res);
     }
@@ -430,6 +466,13 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
     if (method === 'POST' && togglePluginMatch) {
         const pluginName = decodeURIComponent(togglePluginMatch[1]);
         return await pluginApi.handleTogglePlugin(req, res, pluginName);
+    }
+
+    // Uninstall plugin
+    const uninstallPluginMatch = pathParam.match(/^\/api\/plugins\/(.+)$/);
+    if (method === 'DELETE' && uninstallPluginMatch) {
+        const pluginName = decodeURIComponent(uninstallPluginMatch[1]);
+        return await pluginApi.handleUninstallPlugin(req, res, pluginName);
     }
 
     // Custom models management

@@ -157,7 +157,10 @@ class ApiClient {
                 if (!errorMessage) {
                     errorMessage = `${t('common.requestFailed')} (${t('common.status')}: ${response.status})`;
                 }
-                throw new Error(errorMessage);
+                const error = new Error(errorMessage);
+                error.status = response.status;
+                error.data = data;
+                throw error;
             }
 
             return data;
@@ -263,7 +266,10 @@ class ApiClient {
                 const errorMessage = (data && typeof data === 'object' && data.error && data.error.message) 
                     || (data && typeof data === 'object' && data.message)
                     || `${t('common.uploadFailed')} (${t('common.status')}: ${response.status})`;
-                throw new Error(errorMessage);
+                const error = new Error(errorMessage);
+                error.status = response.status;
+                error.data = data;
+                throw error;
             }
 
             return data;
@@ -340,7 +346,7 @@ async function login(password, rememberMe = false) {
         }
     } catch (error) {
         console.error('登录错误:', error);
-        return { success: false, message: '登录失败，请检查网络连接' };
+        return { success: false, message: t('login.error.failed') };
     }
 }
 

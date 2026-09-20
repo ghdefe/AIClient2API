@@ -75,6 +75,132 @@ function getErrorStatusCode(error) {
     return error?.response?.status || error?.status || error?.statusCode || error?.code || null;
 }
 
+function getHttpStatusLabel(status) {
+    switch (status) {
+        case 400: return 'Bad Request';
+        case 401: return 'Unauthorized';
+        case 402: return 'Payment Required';
+        case 403: return 'Forbidden';
+        case 404: return 'Not Found';
+        case 408: return 'Request Timeout';
+        case 409: return 'Conflict';
+        case 422: return 'Unprocessable Entity';
+        case 429: return 'Too Many Requests';
+        case 500: return 'Internal Server Error';
+        case 502: return 'Bad Gateway';
+        case 503: return 'Service Unavailable';
+        case 504: return 'Gateway Timeout';
+        default: return 'HTTP Error';
+    }
+}
+
+function extractReadableErrorText(data) {
+    if (data === undefined || data === null) return '';
+    if (typeof data === 'string') return data;
+    if (Buffer.isBuffer(data)) return data.toString('utf8');
+
+    if (Array.isArray(data)) {
+        return data
+            .map(item => extractReadableErrorText(item))
+            .filter(Boolean)
+            .join(' | ');
+    }
+
+    if (typeof data !== 'object') {
+        return String(data);
+    }
+
+    const directFields = [
+        data.message,
+        data.error_description,
+        data.description,
+        data.detail,
+        data.reason,
+        data.msg
+    ].filter(value => typeof value === 'string' && value.trim());
+
+    if (directFields.length > 0) {
+        return directFields.join(' | ');
+    }
+
+    if (typeof data.error === 'string' && data.error.trim()) {
+        return data.error;
+    }
+
+    if (data.error && typeof data.error === 'object') {
+        const nestedError = extractReadableErrorText(data.error);
+        if (nestedError) return nestedError;
+    }
+
+    if (Array.isArray(data.details)) {
+        const detailText = data.details
+            .map(detail => extractReadableErrorText(detail))
+            .filter(Boolean)
+            .join(' | ');
+        if (detailText) return detailText;
+    }
+
+    if (data.metadata && typeof data.metadata === 'object') {
+        const metadataText = extractReadableErrorText(data.metadata);
+        if (metadataText) return metadataText;
+    }
+
+    try {
+        return JSON.stringify(data);
+    } catch {
+        return String(data);
+    }
+}
+
+export async function getNormalizedErrorResponseText(error) {
+    const data = error?.response?.data;
+    const fallbackText = extractReadableErrorText(data) || error?.message || '';
+
+    if (!data || typeof data?.on !== 'function' || typeof data?.read !== 'function') {
+        return fallbackText;
+    }
+
+    const chunks = [];
+    try {
+        for await (const chunk of data) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+        }
+
+        const bodyText = Buffer.concat(chunks).toString('utf8');
+        if (!bodyText) return fallbackText;
+
+        try {
+            const parsed = JSON.parse(bodyText);
+            return extractReadableErrorText(parsed) || bodyText;
+        } catch {
+            return bodyText;
+        }
+    } catch (readError) {
+        logger.warn(`[Error Normalize] Failed to read error response stream: ${readError.message}`);
+        return fallbackText;
+    }
+}
+
+export function buildHttpErrorReason(status, context, responseText = '', options = {}) {
+    const statusLabel = getHttpStatusLabel(status);
+    const responseSnippet = responseText ? responseText.substring(0, 500) : '';
+    const suffix = options.suffix ? ` - ${options.suffix}` : '';
+    const prefix = status ? `${status} ${statusLabel}` : statusLabel;
+    return `${prefix}${context ? ` (${context})` : ''}${suffix}${responseSnippet ? `: ${responseSnippet}` : ''}`;
+}
+
+export async function normalizeProviderErrorMessage(error, options = {}) {
+    const status = options.status ?? getErrorStatusCode(error);
+    const responseText = await getNormalizedErrorResponseText(error);
+    const reason = buildHttpErrorReason(status, options.context || '', responseText, {
+        suffix: options.suffix || ''
+    });
+    // Normalize in place so existing throw/logging paths that keep using `error`
+    // automatically see the readable message without forcing every caller to reassign.
+    error.message = reason;
+    return { responseText, reason, status };
+}
+
 function getHeaderValue(headers, headerName) {
     if (!headers) return null;
 
@@ -201,6 +327,7 @@ export const API_ACTIONS = {
     GENERATE_CONTENT: 'generateContent',
     STREAM_GENERATE_CONTENT: 'streamGenerateContent',
 };
+export const DEFAULT_REQUEST_BODY_MAX_BYTES = 10 * 1024 * 1024;
 
 import {
     usesManagedModelList,
@@ -389,7 +516,17 @@ function appendCustomModelsToModelList(clientModelList, customEntries, providerT
 export function getProtocolPrefix(provider) {
     // Special case for Codex - it needs its own protocol
     if (provider === 'openai-codex-oauth') {
-        return 'codex';
+        return MODEL_PROTOCOL_PREFIX.CODEX;
+    }
+    // Grok CLI OAuth talks to xAI Responses API directly.
+    if (provider === 'grok-cli-oauth' || provider.startsWith('grok-cli-oauth-')) {
+        return MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES;
+    }
+    // Special cases for OpenAI-compatible dedicated providers.
+    if (provider === 'atlascloud' || provider.startsWith('atlascloud-') ||
+        provider === 'qiniu' || provider.startsWith('qiniu-') ||
+        provider === 'fenno' || provider.startsWith('fenno-')) {
+        return MODEL_PROTOCOL_PREFIX.OPENAI;
     }
 
     const hyphenIndex = provider.indexOf('-');
@@ -471,36 +608,127 @@ export function formatExpiryLog(tag, expiryDate, nearMinutes) {
     return { message, isNearExpiry };
 }
 
+function normalizeIpAddress(ip) {
+    if (!ip) return null;
+
+    let normalized = String(ip).trim();
+    if (!normalized) return null;
+
+    // Clean up IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1 -> 127.0.0.1)
+    if (normalized.startsWith('::ffff:')) {
+        normalized = normalized.substring('::ffff:'.length);
+    }
+
+    return normalized || null;
+}
+
+function parseTrustedProxyIps(value) {
+    if (Array.isArray(value)) {
+        return value
+            .flatMap(item => parseTrustedProxyIps(item))
+            .filter(Boolean);
+    }
+
+    if (typeof value !== 'string') {
+        return [];
+    }
+
+    return value
+        .split(',')
+        .map(item => normalizeIpAddress(item))
+        .filter(Boolean);
+}
+
+function isTrustedProxyIp(ip, trustedProxyIps) {
+    const normalizedIp = normalizeIpAddress(ip);
+    if (!normalizedIp) return false;
+
+    return parseTrustedProxyIps(trustedProxyIps).some(trustedIp => trustedIp === normalizedIp);
+}
+
 /**
- * Get client IP address from request
+ * Get client IP address from request.
+ *
+ * x-forwarded-for is client-controlled unless the immediate peer is a trusted
+ * reverse proxy. Keep TRUST_PROXY disabled by default for login rate limits.
+ *
  * @param {http.IncomingMessage} req - The HTTP request object.
+ * @param {Object} [config] - Optional server configuration.
  * @returns {string} The client IP address.
  */
-export function getClientIp(req) {
-    const forwarded = req.headers['x-forwarded-for'];
-    let ip = forwarded ? forwarded.split(',')[0].trim() : req.socket.remoteAddress;
-    
-    // Clean up IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1 -> 127.0.0.1)
-    if (ip && ip.includes('::ffff:')) {
-        ip = ip.replace('::ffff:', '');
+export function getClientIp(req, config = {}) {
+    const socketIp = normalizeIpAddress(req.socket?.remoteAddress);
+
+    if (config?.TRUST_PROXY === true && isTrustedProxyIp(socketIp, config.TRUSTED_PROXY_IPS)) {
+        const forwarded = req.headers?.['x-forwarded-for'];
+        const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+        const forwardedIp = normalizeIpAddress(forwardedValue?.split(',')[0]);
+        if (forwardedIp) {
+            return forwardedIp;
+        }
     }
-    
-    return ip || 'unknown';
+
+    return socketIp || 'unknown';
 }
 
 /**
  * Reads the entire request body from an HTTP request.
  * @param {http.IncomingMessage} req - The HTTP request object.
+ * @param {{ maxBytes?: number }} options - Optional body limits.
  * @returns {Promise<Object>} A promise that resolves with the parsed JSON request body.
  * @throws {Error} If the request body is not valid JSON.
  */
-export function getRequestBody(req) {
+export function getRequestBody(req, options = {}) {
     return new Promise((resolve, reject) => {
         let body = '';
+        let receivedBytes = 0;
+        let settled = false;
+        const maxBytes = Number(options.maxBytes) > 0 ? Number(options.maxBytes) : DEFAULT_REQUEST_BODY_MAX_BYTES;
+
+        // 1. Quick check Content-Length header
+        const headers = req.headers || {};
+        const contentLength = parseInt(headers['content-length'] || '0', 10);
+        if (!isNaN(contentLength) && contentLength > maxBytes) {
+            req.resume(); // drain & discard
+            const error = new Error(`Request body too large. Maximum size is ${maxBytes} bytes.`);
+            error.statusCode = 413;
+            error.code = 'BODY_TOO_LARGE';
+            return reject(error);
+        }
+
+        const fail = (error) => {
+            if (settled) return;
+            settled = true;
+            if (typeof req.destroy === 'function') {
+                req.destroy();
+            }
+            reject(error);
+        };
+
+        const rejectTooLarge = (error) => {
+            if (settled) return;
+            settled = true;
+            if (typeof req.resume === 'function') {
+                req.resume();
+            }
+            reject(error);
+        };
+
         req.on('data', chunk => {
+            if (settled) return;
+            receivedBytes += chunk.length;
+            if (maxBytes && receivedBytes > maxBytes) {
+                const error = new Error(`Request body too large. Maximum size is ${maxBytes} bytes.`);
+                error.statusCode = 413;
+                error.code = 'BODY_TOO_LARGE';
+                rejectTooLarge(error);
+                return;
+            }
             body += chunk.toString();
         });
         req.on('end', () => {
+            if (settled) return;
+            settled = true;
             if (!body) {
                 return resolve({});
             }
@@ -511,7 +739,7 @@ export function getRequestBody(req) {
             }
         });
         req.on('error', err => {
-            reject(err);
+            fail(err);
         });
     });
 }
@@ -601,6 +829,62 @@ function getPluginHookRequestId(config) {
     return config?._monitorRequestId || null;
 }
 
+/**
+ * 创建一个通用的「上游空响应」错误（HTTP 200 但内容完全为空：无文本、无工具调用、无思考内容）。
+ * 任何 provider 的 *-core.js 检测到这种情况时都可以抛出这个错误，以复用下面的空响应重试分支。
+ * 标记为可切换凭证重试，且不计入凭证错误次数（这通常不是凭证本身的问题，可能是上游偶发静默无输出）。
+ *
+ * @param {string} providerLabel - 用于日志/错误信息的标签，如 'Kiro'、'Qwen' 等
+ */
+export function createEmptyUpstreamResponseError(providerLabel = 'Upstream') {
+    const error = new Error(`[${providerLabel}] Upstream returned an empty response (no text, tool call, or thinking content).`);
+    error.isEmptyUpstreamResponse = true;
+    error.shouldSwitchCredential = true;
+    error.skipErrorCount = true;
+    return error;
+}
+
+/**
+ * 针对上游「空响应」（error.isEmptyUpstreamResponse）计算是否应该重试，并在应该重试时尝试获取一个
+ * 备用的服务实例。重试预算由 CONFIG.EMPTY_RESPONSE_MAX_RETRIES 控制，与凭证切换预算
+ * （CREDENTIAL_SWITCH_MAX_RETRIES）完全独立计数，避免一次空回把凭证切换预算耗光。
+ * 该机制不绑定具体 provider：任何 provider 抛出带 isEmptyUpstreamResponse 标记的错误都会走到这里。
+ *
+ * @param {string} [providerLabel='Upstream'] - 用于日志的 provider 标签，如 'Kiro'、'Qwen' 等
+ * @returns {Promise<{retry: boolean, result?: object, emptyResponseRetry?: number}>}
+ */
+async function resolveEmptyUpstreamResponseRetry(CONFIG, model, attemptsMade, logPrefix, providerLabel = 'Upstream') {
+    const emptyRetryMax = CONFIG?.EMPTY_RESPONSE_MAX_RETRIES ?? 2;
+    const emptyRetryDelayMs = CONFIG?.EMPTY_RESPONSE_RETRY_DELAY_MS ?? 500;
+
+    if (attemptsMade >= emptyRetryMax) {
+        logger.error(`${logPrefix} ${providerLabel} empty response persisted after ${emptyRetryMax} retr${emptyRetryMax === 1 ? 'y' : 'ies'} (same request body). Giving up.`);
+        return { retry: false };
+    }
+
+    logger.warn(`${logPrefix} ${providerLabel} empty response detected (no text/tool/thinking content). Retrying with the same request body (${attemptsMade + 1}/${emptyRetryMax})...`);
+    if (emptyRetryDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, emptyRetryDelayMs));
+    }
+
+    try {
+        // 动态导入以避免循环依赖
+        const { getApiServiceWithFallback } = await import('../services/service-manager.js');
+        const result = await getApiServiceWithFallback(CONFIG, model, { acquireSlot: true });
+
+        if (result && result.service) {
+            logger.info(`${logPrefix} Retrying empty ${providerLabel} response with credential: ${result.uuid} (provider: ${result.actualProviderType})`);
+            return { retry: true, result, emptyResponseRetry: attemptsMade + 1 };
+        }
+
+        logger.warn(`${logPrefix} No alternative credential available for empty-response retry.`);
+        return { retry: false };
+    } catch (retryError) {
+        logger.error(`${logPrefix} Failed to get alternative service for empty-response retry:`, retryError.message);
+        return { retry: false };
+    }
+}
+
 export async function handleStreamRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null) {
     let fullResponseText = '';
     let fullResponseJson = '';
@@ -613,7 +897,12 @@ export async function handleStreamRequest(res, service, model, requestBody, from
     const maxRetries = retryContext?.maxRetries ?? 5;
     const currentRetry = retryContext?.currentRetry ?? 0;
     const CONFIG = retryContext?.CONFIG;
-    const isRetry = currentRetry > 0;
+    // isRetry 用于判断当前调用是否是某次重试的递归帧：既包括凭证切换重试（currentRetry），
+    // 也包括上游空响应重试（emptyResponseRetry，参见 resolveEmptyUpstreamResponseRetry）。只有最外层（非重试）的调用帧才负责
+    // 绑定/解绑客户端事件监听器、发送响应头、以及在 finally 中写入流结束标记 / res.end()。
+    // 如果这里遗漏了 emptyResponseRetry，递归进去的重试帧会误以为自己是最外层，
+    // 导致外层和内层重复对同一个 res 做收尾（重复 res.end()），从而抛出 "write after end"。
+    const isRetry = currentRetry > 0 || (retryContext?.emptyResponseRetry ?? 0) > 0;
     
     // 使用共享的 clientDisconnected 状态（如果是重试，继承上层的状态）
     let clientDisconnected = retryContext?.clientDisconnected || { value: false };
@@ -652,6 +941,12 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         const needsConversion = getProtocolPrefix(fromProvider) !== getProtocolPrefix(toProvider);
         requestBody.model = model;
         const nativeStream = await service.generateContentStream(model, requestBody);
+        
+        // 如果提供者内部发生了模型回退（如 Antigravity 自动降级），同步更新本地 model 变量
+        // 这确保了后续的监控钩子和统计插件记录的是实际使用的模型
+        if (requestBody.model && requestBody.model !== model) {
+            model = requestBody.model;
+        }
         const addEvent = getProtocolPrefix(fromProvider) === MODEL_PROTOCOL_PREFIX.CLAUDE || getProtocolPrefix(fromProvider) === MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES;
         // 为每个请求生成唯一 ID，用于在单例 converter 中隔离并发流状态
         const streamRequestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -778,6 +1073,14 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             }
         }
 
+        // 上游流正常结束但一个字节都没发给客户端：这是「静默空响应」，不能算成功。
+        // 直接抛出通用空响应错误，交给下面的 isEmptyUpstreamResponse 分支做小额重试；
+        // 同时避免把实际没有产出的凭证标记为健康。
+        // 客户端主动断开属于正常情况，不在此列。
+        if (!anyDataSent && !clientDisconnected.value) {
+            throw createEmptyUpstreamResponseError(customName ? `${toProvider}/${customName}` : toProvider);
+        }
+
         // 流式请求成功完成，统计使用次数，错误次数重置为0
         if (providerPoolManager && pooluuid) {
             const customNameDisplay = customName ? `, ${customName}` : '';
@@ -803,6 +1106,57 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             // 直接发送错误并结束
             const errorPayload = createStreamErrorResponse(error, fromProvider);
             if (!res.writableEnded) {
+                try {
+                    res.write(errorPayload);
+                    res.end();
+                } catch (writeErr) {
+                    logger.error('[Stream] Failed to write error response:', writeErr.message);
+                }
+            }
+            responseClosed = true;
+            return;
+        }
+
+        // 上游空响应（无文本/工具调用/思考内容）：使用独立的小额重试预算，
+        // 不占用凭证切换预算（CREDENTIAL_SWITCH_MAX_RETRIES），重试沿用同一份 requestBody，
+        // 不会让历史/token 变大。预算耗尽后直接返回明确错误，不再静默放行空的 end_turn。
+        // 任何 provider 只要抛出带 isEmptyUpstreamResponse 标记的错误都会走到这个分支（目前 Kiro 在用）。
+        if (error.isEmptyUpstreamResponse) {
+            const attemptsMade = retryContext?.emptyResponseRetry ?? 0;
+            const outcome = await resolveEmptyUpstreamResponseRetry(CONFIG, model, attemptsMade, '[Stream Retry]', toProvider);
+
+            if (outcome.retry) {
+                const { result, emptyResponseRetry } = outcome;
+                const newRetryContext = {
+                    ...retryContext,
+                    CONFIG,
+                    currentRetry,
+                    maxRetries,
+                    emptyResponseRetry,
+                    clientDisconnected,
+                    anyDataSent
+                };
+
+                return await handleStreamRequest(
+                    res,
+                    result.service,
+                    result.actualModel || model,
+                    requestBody,
+                    fromProvider,
+                    result.actualProviderType || toProvider,
+                    PROMPT_LOG_MODE,
+                    PROMPT_LOG_FILENAME,
+                    providerPoolManager,
+                    result.uuid,
+                    result.serviceConfig?.customName || customName,
+                    newRetryContext
+                );
+            }
+
+            const giveUpError = new Error(`${toProvider} upstream returned an empty response after ${attemptsMade} retr${attemptsMade === 1 ? 'y' : 'ies'} with the same request. Please try again, or /clear your session if this keeps happening.`);
+            giveUpError.status = 502;
+            const errorPayload = createStreamErrorResponse(giveUpError, fromProvider);
+            if (!clientDisconnected.value && !res.writableEnded) {
                 try {
                     res.write(errorPayload);
                     res.end();
@@ -935,10 +1289,9 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             if (!res.writableEnded) {
                 try {
                     if (clientProtocol === MODEL_PROTOCOL_PREFIX.OPENAI) {
-                        if (!hasMessageStop) {
-                            res.write('data: [DONE]\n\n');
-                            hasMessageStop = true;
-                        }
+                        // OpenAI 规范：无论是否已有 finish_reason chunk，都必须以 [DONE] 收尾
+                        res.write('data: [DONE]\n\n');
+                        hasMessageStop = true;
                     } else if (clientProtocol === MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES) {
                         // OpenAI Responses 以 response.completed/response.incomplete（或 error）作为结束事件。
                         // 连接关闭即表示流结束；不要再追加 `event: done` + `data: {}`，否则会触发下游类型校验失败（AI_TypeValidationError）。
@@ -984,6 +1337,13 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         requestBody.model = model;
         // fs.writeFile('oldRequest'+Date.now()+'.json', JSON.stringify(requestBody));
         const nativeResponse = await service.generateContent(model, requestBody);
+        
+        // 如果提供者内部发生了模型回退（如 Antigravity 自动降级），同步更新本地 model 变量
+        // 这确保了后续的监控钩子和统计插件记录的是实际使用的模型
+        if (requestBody.model && requestBody.model !== model) {
+            model = requestBody.model;
+        }
+        
         const responseText = extractResponseText(nativeResponse, toProvider);
 
         // Convert the response back to the client's format (fromProvider), if necessary.
@@ -1024,6 +1384,47 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         }
     } catch (error) {
         logger.error('\n[Server] Error during unary processing:', error.stack);
+
+        // 上游空响应（无文本/工具调用/思考内容）：使用独立的小额重试预算，
+        // 不占用凭证切换预算（CREDENTIAL_SWITCH_MAX_RETRIES），重试沿用同一份 requestBody，
+        // 不会让历史/token 变大。预算耗尽后直接返回明确错误，不再静默放行空响应。
+        // 任何 provider 只要抛出带 isEmptyUpstreamResponse 标记的错误都会走到这个分支（目前 Kiro 在用）。
+        if (error.isEmptyUpstreamResponse) {
+            const attemptsMade = retryContext?.emptyResponseRetry ?? 0;
+            const outcome = await resolveEmptyUpstreamResponseRetry(CONFIG, model, attemptsMade, '[Unary Retry]', toProvider);
+
+            if (outcome.retry) {
+                const { result, emptyResponseRetry } = outcome;
+                const newRetryContext = {
+                    ...retryContext,
+                    CONFIG,
+                    currentRetry,
+                    maxRetries,
+                    emptyResponseRetry
+                };
+
+                return await handleUnaryRequest(
+                    res,
+                    result.service,
+                    result.actualModel || model,
+                    requestBody,
+                    fromProvider,
+                    result.actualProviderType || toProvider,
+                    PROMPT_LOG_MODE,
+                    PROMPT_LOG_FILENAME,
+                    providerPoolManager,
+                    result.uuid,
+                    result.serviceConfig?.customName || customName,
+                    newRetryContext
+                );
+            }
+
+            const giveUpError = new Error(`${toProvider} upstream returned an empty response after ${attemptsMade} retr${attemptsMade === 1 ? 'y' : 'ies'} with the same request. Please try again, or /clear your session if this keeps happening.`);
+            giveUpError.status = 502;
+            const errorResponse = createErrorResponse(giveUpError, fromProvider);
+            await handleUnifiedResponse(res, JSON.stringify(errorResponse), false, 502);
+            return;
+        }
         
         // 获取状态码（用于日志记录，不再用于判断是否重试）
         const status = getErrorStatusCode(error);
@@ -1282,7 +1683,7 @@ export async function handleModelListRequest(req, res, service, endpointType, CO
  * @param {string} PROMPT_LOG_FILENAME - The prompt log filename.
  */
 export async function handleContentGenerationRequest(req, res, service, endpointType, CONFIG, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, requestPath = null) {
-    const originalRequestBody = await getRequestBody(req);
+    const originalRequestBody = await getRequestBody(req, { maxBytes: CONFIG.REQUEST_BODY_MAX_BYTES });
 
     if (!originalRequestBody) {
         throw new Error("Request body is missing for content generation.");
@@ -1425,6 +1826,11 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         await handleStreamRequest(res, service, model, processedRequestBody, fromProvider, toProvider, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, actualUuid, actualCustomName, retryContext);
     } else {
         await handleUnaryRequest(res, service, model, processedRequestBody, fromProvider, toProvider, CONFIG.PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, actualUuid, actualCustomName, retryContext);
+    }
+
+    // 同步更新模型名称（如果处理器内部或提供者发生了回退）
+    if (processedRequestBody.model && processedRequestBody.model !== model) {
+        model = processedRequestBody.model;
     }
 
     // 执行插件钩子：内容生成后
@@ -1833,6 +2239,33 @@ export function extractSystemPromptFromRequestBody(requestBody, provider) {
                 }
             }
             break;
+        case MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES: {
+            if (typeof requestBody.instructions === 'string') {
+                incomingSystemText = requestBody.instructions;
+            } else if (requestBody.instructions) {
+                incomingSystemText = JSON.stringify(requestBody.instructions);
+            } else if (Array.isArray(requestBody.input)) {
+                const responsesSystemItem = requestBody.input.find(item =>
+                    item?.role === 'system' ||
+                    item?.role === 'developer' ||
+                    item?.type === 'system' ||
+                    item?.type === 'developer' ||
+                    (item?.type === 'message' && (item?.role === 'system' || item?.role === 'developer'))
+                );
+
+                const content = responsesSystemItem?.content;
+                if (typeof content === 'string') {
+                    incomingSystemText = content;
+                } else if (Array.isArray(content)) {
+                    incomingSystemText = content
+                        .map(part => typeof part === 'string' ? part : (part?.text || part?.content || JSON.stringify(part)))
+                        .join('\n');
+                } else if (content) {
+                    incomingSystemText = JSON.stringify(content);
+                }
+            }
+            break;
+        }
         default:
             logger.warn(`[System Prompt] Unknown provider: ${provider}`);
             break;

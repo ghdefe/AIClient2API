@@ -4,16 +4,32 @@
 
 # AIClient2API（A2）🚀
 
-**A powerful proxy that can unify the requests of various client-only large model APIs (Gemini CLI, Antigravity, Codex, Grok, Kiro ...), simulate requests, and encapsulate them into a local OpenAI-compatible interface.**
+**A powerful proxy that can unify the requests of various client-only large model APIs (Antigravity, Codex, Grok, Kiro ...), simulate requests, and encapsulate them into a local OpenAI-compatible interface.**
 
-<a href="https://trendshift.io/repositories/15832" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15832" alt="justlovemaki%2FAIClient-2-API | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</div>
 </div>
 
 <div align="center">
 
-<a href="https://deepwiki.com/justlovemaki/AIClient-2-API"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"  style="width: 134px; height: 23px;margin-bottom: 3px;"></a>
+<table align="center">
+  <thead>
+    <tr>
+      <th align="center">Docker Downloads > 100k</th>
+      <th align="center">Ranked #2 on Trendshift</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="center" valign="middle">
+        <img src="https://docker-card.justlikemaki.workers.dev/justlikemaki/aiclient-2-api?layout=compact&theme=github" alt="AIClient2API" style="width: 100%; max-width: 520px; height: 320px;object-fit: contain;" />
+      </td>
+      <td align="center" valign="middle">
+        <a href="https://trendshift.io/repositories/15832" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15832" alt="justlovemaki%2FAIClient-2-API | Trendshift" style="width: 360px; height: 120px;"/></a>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
+[![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/justlovemaki/AIClient-2-API)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Node.js](https://img.shields.io/badge/Node.js-≥20.0.0-green.svg)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/docker-≥20.0.0-blue.svg)](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
@@ -42,16 +58,43 @@
       PackyCode is a reliable and efficient API relay service provider, offering relay services for Claude Code, Codex, Gemini, and more. PackyCode provides special discounts for our software users: <a href="https://www.packyapi.com/register?aff=AIClient2API">register using this link</a> and enter the <strong>AIClient2API</strong> promo code during recharge to get <strong>10% off</strong>.
     </td>
   </tr>
+  <!--
   <tr>
     <td width="25%" align="center" valign="middle">
-      <a href="https://visioncoder.com">
+      <a href="https://apikey.fun/register?aff=AIClient2API">
+        <img src="static/apikey.fun.png" alt="APIKEY.FUN Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      Thanks to APIKEY.FUN for sponsoring this project! APIKEY.FUN is a professional enterprise-grade AI relay station, dedicated to providing stable, efficient, and low-cost AI model API access services for enterprises and individual developers. The platform supports mainstream popular models such as Claude, OpenAI, and Gemini, with prices as low as 7% of the official original price. Register through the <a href="https://apikey.fun/register?aff=AIClient2API">project's exclusive link</a> to enjoy an exclusive discount of up to <strong>5% off (95% of original price)</strong> for permanent recharges.
+    </td>
+  </tr>
+  -->
+  <!--
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://visioncoder.cn">
         <img src="static/visioncoder.png" alt="VisionCoder Sponsor" width="180">
       </a>
     </td>
     <td width="75%" align="left" valign="middle">
-      Thanks to VisionCoder for supporting this project. VisionCoder Developer Platform is a reliable and efficient API relay service provider, offering access to mainstream AI models such as Claude Code, Codex, and Gemini. It helps developers and teams integrate AI capabilities more easily and improve productivity. VisionCoder is also offering our users a limited-time <a href="https://visioncoder.com">Token Plan</a> promotion: <strong>buy 1 month and get 1 month free</strong>.
+      Thanks to VisionCoder for supporting this project. <a href="https://visioncoder.cn">VisionCoder Developer Platform</a> is a reliable and efficient API relay service provider, offering access to mainstream AI models such as Claude Code, Codex, and Gemini. It helps developers and teams integrate AI capabilities more easily and improve productivity. Additionally, VisionCoder now offers retail channels for <strong>Claude Max 200 and GPT Pro 200 premium accounts</strong>, providing users with instant access to top-tier AI computing power and features.
     </td>
   </tr>
+  -->
+  <!-- Atlas Cloud
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://www.atlascloud.ai/console/coding-plan">
+        <img src="static/atlascloud.png" alt="Atlas Cloud Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      Thanks to Atlas Cloud for sponsoring this project! Atlas Cloud is a <strong>full-modal AI inference platform</strong> that gives developers a single AI API to access video generation, image generation, and LLM APIs. Instead of managing multiple vendor integrations, you connect once and get unified access to <strong>300+ curated models</strong> across all modalities. Check out Atlas Cloud's new <a href="https://www.atlascloud.ai/console/coding-plan">coding plan promotion</a> for more budget-friendly API access.
+    </td>
+  </tr>
+  -->
+  <!--
   <tr>
     <td width="25%" align="center" valign="middle">
       <a href="https://www.aicodemirror.com/register?invitecode=5BUE62">
@@ -62,6 +105,7 @@
       Thanks to AICodeMirror for sponsoring this project! AICodeMirror provides official high-stability relay services for Claude Code / Codex / Gemini CLI, with enterprise-grade concurrency, fast invoicing, and 24/7 dedicated technical support. Claude Code / Codex / Gemini official channels at 38% / 2% / 9% of original price, with extra discounts on top-ups! AICodeMirror offers special benefits for AIClient2API users: <a href="https://www.aicodemirror.com/register?invitecode=5BUE62">register via this link</a> to enjoy <strong>20% off</strong> your first top-up, and enterprise customers can get up to 25% off!
     </td>
   </tr>
+  -->
 
 <!--
   <tr>
@@ -87,6 +131,48 @@
     </td>
   </tr>
 -->
+<!-- Fenno.ai and Qiniu Cloud AI
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&aff=2EW65KEQC938">
+        <img src="static/fenno.png" alt="Fenno.ai Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      Fenno.ai is a stable and efficient API relay service provider, currently focused on Codex relay services. It is compatible with OpenAI and Anthropic protocols, can flexibly integrate with mainstream coding tools such as Codex, Claude Code, and OpenCode, and can reliably support enterprise-scale demand of hundreds of billions of tokens per day. It supports corporate settlement and invoicing for both domestic and overseas entities. Fenno.ai provides exclusive benefits for CC-Connect users: <a href="https://api.fenno.ai/register?redirect=/purchase?tab=subscription%26group=16&aff=2EW65KEQC938">subscribe via this link</a> to get the value Coding Plan at <strong>9.9 RMB for $150 quota</strong>, and earn up to <strong>20% rewards</strong> by inviting friends.
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://s.qiniu.com/FRF7bq">
+        <img src="static/qiniu.png" alt="Qiniu Cloud AI Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      Qiniu Cloud AI is an <strong>enterprise-grade large-model MaaS platform</strong> under Qiniu Cloud (02567.HK). It offers one-stop access to <strong>150+ mainstream global models</strong>, is compatible with major model provider protocols, and covers full-modal capabilities including text, image, audio, video, and file processing, serving more than 1.69 million enterprise and developer users. Exclusive benefit: enterprise users can <a href="https://s.qiniu.com/FRF7bq">claim <strong>12 million tokens</strong> for free</a>, and can earn up to <strong>tens of billions of tokens</strong> by inviting friends.
+    </td>
+  </tr>
+-->
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://vmcardio.com/zh/register?code=OPXPWHXWD5">
+        <img src="static/vmcard.png" alt="VMCard Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      <strong>VMCard | Enterprise Payment Cards for AI Businesses</strong> is built for AI account vendors, AI API providers, and teams managing bulk subscriptions. It enables seamless GPT / Claude payments with dedicated U.S. Visa BINs, API-based bulk card issuance, and the lowest settlement exchange rates available—ideal for high-volume, long-term, stable payment needs. <a href="https://vmcardio.com/zh/register?code=OPXPWHXWD5">Register through this link</a>.
+    </td>
+  </tr>
+  <tr>
+    <td width="25%" align="center" valign="middle">
+      <a href="https://www.axisnow.io">
+        <img src="static/axisnow.jpg" alt="AxisNow Sponsor" width="180">
+      </a>
+    </td>
+    <td width="75%" align="left" valign="middle">
+      <a href="https://www.axisnow.io">AxisNow</a> protects and accelerates websites and APIs while delivering an optimized access experience across mainland China and the rest of the world. Through its client SDK, AxisNow extends acceleration and security capabilities to native/mobile apps — <strong>self-hosted private CDN｜subscription-based DDoS-protected CDN｜independently controlled, flexibly composable CDN networks.</strong>
+    </td>
+  </tr>
   <tr>
     <td width="25%" align="center" valign="middle">
       <img src="static/wechat.png" alt="Sponsor Contact" width="150">
@@ -102,7 +188,7 @@
 
 ## 🚀 Overview
 
-`AIClient2API` is an API proxy service that breaks through client limitations, converting free large models originally restricted to client use only (such as Gemini, Antigravity, Codex, Grok, Kiro) into standard OpenAI-compatible interfaces that can be called by any application. Built on Node.js, it supports intelligent conversion between OpenAI, Claude, and Gemini protocols, enabling tools like Cherry-Studio, NextChat, and Cline to freely use advanced models such as Claude Opus 4.5 and Gemini 3.0 Pro at scale. The project adopts a modular architecture based on strategy and adapter patterns, with built-in account pool management, intelligent polling, automatic failover, and health check mechanisms, ensuring 99.9% service availability.
+`AIClient2API` is an API proxy service that breaks through client limitations, converting free large models originally restricted to client use only (such as Gemini, Antigravity, Codex, Grok, Kiro) into standard OpenAI-compatible interfaces that can be called by any application. Built on Node.js, it supports intelligent conversion between OpenAI, Claude, and Gemini protocols, enabling tools like Cherry-Studio, NextChat, and Cline to freely use advanced models such as Claude Opus and Gemini Pro at scale. The project adopts a modular architecture based on strategy and adapter patterns, with built-in account pool management, intelligent polling, automatic failover, and health check mechanisms, ensuring 99.9% service availability.
 
 > [!NOTE]
 > **🎉 Important Milestone**
@@ -114,9 +200,10 @@
 > <details>
 > <summary>Click to expand detailed version history</summary>
 > 
+> - **2026.06.03** - Added Grok Build (Grok CLI) support: integrated the `grok-cli-oauth` xAI OAuth / Responses API flow, covering Grok Build text models, multi-protocol conversion, built-in tools (web search, X search, code interpreter, collections/file attachments), and image/video generation models.
 > - **2026.05.04 (v3.0.0)** - **Milestone Update: Deep AI Integration & Self-Discovery Architecture**. Added automated Skill guides and remote `/api/help`, `/api/example` endpoints, enabling AI agents to seamlessly understand and operate 50+ full API endpoints; achieved full unification of CLI and REST API output results with enhanced structured JSON support.
 > - **2026.04.29** - Comprehensive support for OpenAI standard Image Generation (`/v1/images/generations`) and Image Editing (`/v1/images/edits`) interfaces. Supports automatic conversion from OpenAI format to native image generation protocols of various models, fully compatible with provider pool polling and retry mechanisms, significantly improving the stability of multimodal creation.
-> - **2026.03.02** - Added Grok protocol support, supporting access to xAI Grok series models (Grok 3/4) via Cookie/SSO, supporting multimodal input, image/video generation, automatic token refresh and streaming output
+> - **2026.03.02** - Added Grok protocol support, supporting access to xAI Grok series models (Grok) via Cookie/SSO, supporting multimodal input, image/video generation, automatic token refresh and streaming output
 > - **2026.01.26** - Added Codex protocol support: supports OpenAI Codex OAuth authorization access
 > - **2026.01.25** - Enhanced AI Monitor plugin: supports monitoring request parameters and responses before and after AI protocol conversion. Optimized log management: unified log format, visual configuration
 > - **2026.01.15** - Optimized provider pool manager: added async refresh queue mechanism, buffer queue deduplication, global concurrency control, node warmup and automatic expiry detection
@@ -124,15 +211,15 @@
 > - **2025.12.30** - Added main process management and automatic update functionality
 > - **2025.12.25** - Unified configuration management: All configs centralized to `configs/` directory. Docker users need to update mount path to `-v "local_path:/app/configs"`
 > - **2025.12.11** - Automatically built Docker images are now available on Docker Hub: [justlikemaki/aiclient-2-api](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
-> - **2025.11.30** - Added Antigravity protocol support, enabling access to Gemini 3 Pro, Claude Sonnet 4.5, and other models via Google internal interfaces
+> - **2025.11.30** - Added Antigravity protocol support, enabling access to Gemini Pro, Claude Sonnet, and other models via Google internal interfaces
 > - **2025.11.11** - Added Web UI management console, supporting real-time configuration management and health status monitoring
-> - **2025.11.06** - Added support for Gemini 3 Preview, enhanced model compatibility and performance optimization
-> - **2025.10.18** - Kiro open registration, new accounts get 500 credits, full support for Claude Sonnet 4.5
+> - **2025.11.06** - Added support for Gemini Preview, enhanced model compatibility and performance optimization
+> - **2025.10.18** - Kiro open registration, new accounts get 500 credits, full support for Claude Sonnet
 > - **2025.08.29** - Released account pool management feature, supporting multi-account polling, intelligent failover, and automatic degradation strategies
 >   - Configuration: Add `PROVIDER_POOLS_FILE_PATH` parameter in `configs/config.json`
 >   - Reference configuration: [provider_pools.json](./configs/provider_pools.json.example)
 > - **History Developed**
->   - Support Gemini CLI, Kiro and other client2API
+>   - Support Gemini , Kiro and other client2API
 >   - OpenAI, Claude, Gemini three-protocol mutual conversion, automatic intelligent switching
 > </details>
 
@@ -157,7 +244,7 @@
 >   ```
 
 ### 🎯 Unified Access, One-Stop Management
-*   **Multi-Model Unified Interface**: Through standard OpenAI-compatible protocol, configure once to access mainstream large models including Gemini, Claude, Grok, Codex, Kimi K2, MiniMax M2
+*   **Multi-Model Unified Interface**: Through standard OpenAI-compatible protocol, configure once to access mainstream large models including Gemini, Claude, Grok, Codex, Kimi, MiniMax
 *   **Flexible Switching Mechanism**: Path routing, support dynamic model switching via startup parameters or environment variables to meet different scenario requirements
 *   **Zero-Cost Migration**: Fully compatible with OpenAI API specifications, tools like Cherry-Studio, NextChat, Cline can be used without modification
 *   **Multi-Protocol Intelligent Conversion**: Support intelligent conversion between OpenAI, Claude, and Gemini protocols for cross-protocol model invocation
@@ -165,7 +252,7 @@
 ### 🚀 Break Through Limitations, Improve Efficiency
 *   **Bypass Official Restrictions**: Utilize OAuth authorization mechanism to effectively break through rate and quota limits of services like Gemini, Antigravity
 *   **TLS Fingerprint Bypass**: Built-in TLS Sidecar (Go uTLS) to simulate browser features, effectively bypassing Cloudflare 403 blocks for services like Grok
-*   **Free Advanced Models**: Use Claude Opus 4.5 for free via Kiro API mode, reducing usage costs
+*   **Free Advanced Models**: Use Claude Opus for free via Kiro API mode, reducing usage costs
 *   **Intelligent Account Pool Scheduling**: Support multi-account polling, automatic failover, and configuration degradation, ensuring 99.9% service availability
 
 ### 🛡️ Secure and Controllable, Data Transparent
@@ -206,14 +293,15 @@ The most recommended way to use AIClient2API is to start it through an automated
 #### 🐳 Docker Quick Start (Recommended)
 
 ```bash
-docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19876-19880 --restart=always -v "your_path:/app/configs" --name aiclient2api justlikemaki/aiclient-2-api
+docker run -d -p 3000:3000 -p 8086:8086 -p 1455:1455 -p 56121:56121 -p 19876-19880:19876-19880 --restart=always -v "your_path/configs:/app/configs" -v "your_path/plugins:/app/src/plugins-user" --name aiclient2api justlikemaki/aiclient-2-api
 ```
 
 **Parameter Description**:
 - `-d`: Run container in background
-- `-p 3000:3000 ...`: Port mapping. 3000 is for Web UI, others are for OAuth callbacks (Gemini: 8085, Antigravity: 8086, Codex: 1455, Kiro: 19876-19880)
+- `-p 3000:3000 ...`: Port mapping. 3000 is for Web UI, others are for OAuth callbacks (Antigravity: 8086, Codex: 1455, Grok CLI: 56121, Kiro: 19876-19880)
 - `--restart=always`: Container auto-restart policy
-- `-v "your_path:/app/configs"`: Mount configuration directory (replace "your_path" with actual path, e.g., `/home/user/aiclient-configs`)
+- `-v "your_path/configs:/app/configs"`: Mount configuration directory (replace "your_path" with actual path, e.g., `/home/user/aiclient2api`)
+- `-v "your_path/plugins:/app/src/plugins-user"`: Mount user plugins directory
 - `--name aiclient2api`: Container name
 
 #### 🐳 Docker Compose Deployment
@@ -321,10 +409,10 @@ Supports various input types such as images and documents, providing you with a 
 
 #### Latest Model Support
 Seamlessly support the following latest large models, just configure the corresponding endpoint in Web UI or [`configs/config.json`](./configs/config.json):
-*   **Grok 3 / Grok 4** - xAI's flagship models, now supported via Grok Cookie/SSO, supporting thinking models, image generation, and video generation
-*   **Claude 4.5 Opus** - Anthropic's strongest model ever, now supported via Kiro, Antigravity
-*   **Gemini 3 Pro** - Google's next-generation architecture preview, now supported via Gemini, Antigravity
-*   **Kimi K2 / MiniMax M2** - Synchronized support for top domestic flagship models, now supported via custom OpenAI, Claude
+*   **Grok / Grok Build** - xAI's flagship models, now supported via Grok Cookie/SSO and Grok CLI OAuth, supporting thinking models, Grok Build, built-in tools, image generation, and video generation
+*   **Claude Opus** - Anthropic's strongest model ever, now supported via Kiro, Antigravity
+*   **Gemini Pro** - Google's next-generation architecture preview, now supported via Gemini, Antigravity
+*   **Kimi / MiniMax** - Synchronized support for top domestic flagship models, now supported via custom OpenAI, Claude
 
 ---
 
@@ -337,15 +425,10 @@ Seamlessly support the following latest large models, just configure the corresp
 
 #### 🌐 Web UI Quick Authorization (Recommended)
 In the Web UI management interface, you can complete authorization configuration rapidly:
-1. **Generate Authorization**: On the **"Provider Pools"** page or **"Configuration"** page, click the **"Generate Authorization"** button in the upper right corner of the corresponding provider (e.g., Gemini).
-2. **Scan/Login**: An authorization dialog will pop up, you can click **"Open in Browser"** for login verification. For Gemini and Antigravity, complete the Google account authorization.
+1. **Generate Authorization**: On the **"Provider Pools"** page or **"Configuration"** page, click the **"Generate Authorization"** button in the upper right corner of the corresponding provider (e.g., Codex).
+2. **Scan/Login**: An authorization dialog will pop up, you can click **"Open in Browser"** for login verification. For Antigravity, complete the Google account authorization.
 3. **Auto-Save**: After successful authorization, the system will automatically obtain credentials and save them to the corresponding directory in `configs/`. You can see the newly generated credentials on the **"Config Files"** page.
 4. **Visual Management**: You can upload or delete credentials at any time in the Web UI, or use the **"Quick Associate"** function to bind existing credential files to providers with one click.
-
-#### Gemini CLI OAuth Configuration
-1. **Obtain OAuth Credentials**: Visit [Google Cloud Console](https://console.cloud.google.com/) to create a project and enable Gemini API
-2. **Project Configuration**: You may need to provide a valid Google Cloud project ID, which can be specified via the startup parameter `--project-id`
-3. **Ensure Project ID**: When configuring in the Web UI, ensure the project ID entered matches the project ID displayed in the Google Cloud Console and Gemini CLI.
 
 #### Antigravity OAuth Configuration
 1. **Personal Account**: Personal accounts require separate authorization, application channels have been closed.
@@ -404,11 +487,17 @@ Notes:
 3. **Auto Save**: After successful authorization, the system automatically saves the Codex OAuth credential file
 4. **Callback Port**: Ensure the OAuth callback port `1455` is not occupied
 
+#### Grok CLI OAuth Configuration
+1. **Generate Authorization**: On the Web UI "Provider Pools" or "Configuration" page, click the "Generate Authorization" button for Grok CLI
+2. **Browser Login**: The system opens the xAI authorization page to complete OAuth login
+3. **Auto Save**: After successful authorization, the system automatically saves the Grok CLI OAuth credential file to `configs/grok-cli/`
+4. **Callback Port**: Ensure the OAuth callback port `56121` is not occupied
+
 #### Grok Cookie/SSO Configuration
 1. **Obtain SSO Token**: Log in to the [Grok official website](https://grok.com/), copy the value of `sso` from Application -> Cookies in browser developer tools
 2. **Enter Configuration**: In the Web UI "Configuration" page or directly modify the configuration file, enter the token into `GROK_COOKIE_TOKEN`
 3. **Supported Features**:
-   - Chat and Thinking models (Grok 3 Thinking)
+   - Chat and Thinking models (Grok Thinking)
    - Image generation (Grok Imagine)
    - Video generation (Grok Video)
 4. **Notes**: Ensure `GROK_USER_AGENT` matches the browser used when obtaining the cookie to avoid being blocked
@@ -430,10 +519,10 @@ Default storage locations for authorization credential files of each service:
 
 | Service | Default Path | Description |
 |------|---------|------|
-| **Gemini** | `~/.gemini/oauth_creds.json` | OAuth authentication credentials |
 | **Kiro** | `~/.aws/sso/cache/kiro-auth-token.json` | Kiro authentication token |
-| **Antigravity** | `~/.antigravity/oauth_creds.json` | Antigravity OAuth credentials (supports Claude 4.5 Opus) |
+| **Antigravity** | `~/.antigravity/oauth_creds.json` | Antigravity OAuth credentials (supports Claude Opus) |
 | **Codex** | `~/.codex/oauth_creds.json` | Codex OAuth credentials |
+| **Grok CLI** | `configs/grok-cli/..._xai-..._oauth_creds.json` | Grok CLI OAuth credentials |
 
 > **Note**: `~` represents the user home directory (Windows: `C:\Users\username`, Linux/macOS: `/home/username` or `/Users/username`)
 
@@ -469,7 +558,6 @@ This project supports flexible proxy configuration, allowing you to configure a 
    {
      "PROXY_URL": "http://127.0.0.1:7890",
       "PROXY_ENABLED_PROVIDERS": [
-        "gemini-cli-oauth",
         "gemini-antigravity",
         "claude-kiro-oauth",
         "grok-web"
@@ -485,7 +573,7 @@ This project supports flexible proxy configuration, allowing you to configure a 
    ```json
    {
      "OPENAI_BASE_URL": "https://your-proxy-endpoint.com/v1",
-     "CLAUDE_BASE_URL": "https://your-proxy-endpoint.com"
+     "CLAUDE_BASE_URL": "https://your-proxy-endpoint.com/v1"
    }
    ```
 
@@ -512,7 +600,7 @@ Support excluding unsupported models through `notSupportedModels` configuration,
 
 ```json
 {
-  "gemini-cli-oauth": [
+  "gemini-antigravity": [
     {
       "uuid": "provider-1",
       "notSupportedModels": ["gemini-3.0-pro", "gemini-3.5-flash"],
@@ -532,15 +620,13 @@ Support excluding unsupported models through `notSupportedModels` configuration,
 
 #### 3. Cross-Type Fallback Configuration
 
-When all accounts under a Provider Type (e.g., `gemini-cli-oauth`) are exhausted due to 429 quota limits or marked as unhealthy, the system can automatically fallback to another compatible Provider Type (e.g., `gemini-antigravity`) instead of returning an error directly.
+When all accounts under a Provider Type (e.g., `claude-kiro-oauth`) are exhausted due to 429 quota limits or marked as unhealthy, the system can automatically fallback to another compatible Provider Type (e.g., `claude-custom`) instead of returning an error directly.
 
 **Configuration**: Add `providerFallbackChain` configuration in `configs/config.json`:
 
 ```json
 {
   "providerFallbackChain": {
-    "gemini-cli-oauth": ["gemini-antigravity"],
-    "gemini-antigravity": ["gemini-cli-oauth"],
     "claude-kiro-oauth": ["claude-custom"],
     "claude-custom": ["claude-kiro-oauth"]
   }
@@ -553,7 +639,7 @@ When all accounts under a Provider Type (e.g., `gemini-cli-oauth`) are exhausted
    - Look up the configured fallback types
    - Check if the fallback type supports the requested model (protocol compatibility check)
    - Select a healthy account from the fallback type's pool
-3. Supports multi-level degradation chains: `gemini-cli-oauth → gemini-antigravity → openai-custom`
+3. Supports multi-level degradation chains: `claude-kiro-oauth → claude-custom → openai-custom`
 4. Only returns an error if all fallback types are also unavailable
 
 **Use Cases**:
@@ -611,7 +697,7 @@ For services like Grok that strictly validate TLS fingerprints (JA3/JA4), this p
 
 **Solutions**:
 - **Check Network Connection**: Ensure you can access Google, Alibaba Cloud, and other services normally
-- **Check Port Occupation**: OAuth callbacks require specific ports (Gemini: 8085, Antigravity: 8086, Codex: 1455, Kiro: 19876-19880), ensure these ports are not occupied
+- **Check Port Occupation**: OAuth callbacks require specific ports (Antigravity: 8086, Codex: 1455, Grok CLI: 56121, Kiro: 19876-19880), ensure these ports are not occupied
 - **Clear Browser Cache**: Try using incognito mode or clearing browser cache and retry
 - **Check Firewall Settings**: Ensure the firewall allows access to local callback ports
 - **Docker Users**: Ensure all OAuth callback ports are correctly mapped
@@ -776,19 +862,11 @@ This project follows the [**GNU General Public License v3 (GPLv3)**](https://www
 
 ## 🙏 Acknowledgements
 
-The development of this project was greatly inspired by the official Google Gemini CLI and referenced part of the code implementation of `gemini-cli.ts` in Cline 3.18.0. Sincere thanks to the Google official team and the Cline development team for their excellent work!
-
 ### Contributor List
 
 Thanks to all the developers who contributed to the AIClient2API project:
 
 [![Contributors](https://contrib.rocks/image?repo=justlovemaki/AIClient-2-API)](https://github.com/justlovemaki/AIClient-2-API/graphs/contributors)
-
-
-### 🌟 Star History
-
-
-[![Star History Chart](https://api.star-history.com/svg?repos=justlovemaki/AIClient-2-API&type=Timeline)](https://www.star-history.com/#justlovemaki/AIClient-2-API&Timeline)
 
 ---
 

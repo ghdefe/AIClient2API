@@ -69,6 +69,7 @@ export function initPluginManager() {
     window.installPlugin = installPlugin;
     window.showPayment = showPayment;
     window.togglePlugin = togglePlugin;
+    window.uninstallPlugin = uninstallPlugin;
 }
 
 /**
@@ -171,7 +172,8 @@ function renderPluginsList() {
                     <h3>${plugin.name}</h3>
                     <span class="plugin-version">v${plugin.version}</span>
                 </div>
-                <div class="plugin-actions">
+                <div class="plugin-actions" style="display: flex; align-items: center; gap: 10px;">
+                    ${!plugin.isBuiltin ? `<button class="btn-uninstall-icon" title="${t('plugins.uninstall.title')}" data-i18n-title="plugins.uninstall.title" onclick="window.uninstallPlugin('${plugin.name}')" style="background: none; border: none; color: var(--danger-color); cursor: pointer; padding: 4px; display: inline-flex; align-items: center; justify-content: center; font-size: 1rem;"><i class="fas fa-trash-alt"></i></button>` : ''}
                     <label class="toggle-switch">
                         <input type="checkbox" ${plugin.enabled ? 'checked' : ''} onchange="window.togglePlugin('${plugin.name}', this.checked)">
                         <span class="toggle-slider"></span>
@@ -214,13 +216,13 @@ export async function loadMarketPlugins() {
         if (response && response.plugins) {
             marketPluginsList = response.plugins;
             renderMarketList();
-            if (updateUrl) showToast(t('common.success'), '市场索引已从远程更新', 'success');
+            if (updateUrl) showToast(t('common.success'), t('plugins.market.remoteUpdated'), 'success');
         } else {
             if (emptyEl) emptyEl.style.display = 'flex';
         }
     } catch (error) {
         console.error('Failed to load market plugins:', error);
-        showToast(t('common.error'), '加载市场失败: ' + error.message, 'error');
+        showToast(t('common.error'), t('plugins.market.loadFailed', { error: error.message }), 'error');
         if (emptyEl) emptyEl.style.display = 'flex';
     } finally {
         if (loadingEl) loadingEl.style.display = 'none';
@@ -245,7 +247,9 @@ function renderMarketList() {
     if (emptyEl) emptyEl.style.display = 'none';
     
     marketPluginsList.forEach(plugin => {
-        const isInstalled = pluginsList.some(p => p.name === plugin.id);
+        const installedPlugin = pluginsList.find(p => p.name === plugin.id);
+        const isInstalled = !!installedPlugin;
+        const hasUpdate = isInstalled && compareVersions(plugin.version, installedPlugin.version) > 0;
         const isIncompatible = plugin.minSystemVersion && compareVersions(currentSystemVersion, plugin.minSystemVersion) < 0;
         
         const card = document.createElement('div');
@@ -253,14 +257,20 @@ function renderMarketList() {
         card.id = `market-card-${plugin.id}`;
         
         let actionButton = '';
-        if (isInstalled) {
+        if (isInstalled && !hasUpdate) {
             actionButton = `<button class="btn btn-secondary btn-install" disabled><i class="fas fa-check"></i> ${t('plugins.market.installed') || '已安装'}</button>`;
+        } else if (hasUpdate) {
+            if (plugin.isPaid) {
+                actionButton = `<button class="btn btn-primary btn-install" style="background: var(--warning-color); border-color: var(--warning-color)" onclick="window.showPayment('${plugin.id}')"><i class="fas fa-sync-alt"></i> ${t('plugins.market.updateTo', { version: plugin.version })}</button>`;
+            } else {
+                actionButton = `<button class="btn btn-primary btn-install" onclick="window.installPlugin('${plugin.id}')"><i class="fas fa-sync-alt"></i> ${t('plugins.market.updateTo', { version: plugin.version })}</button>`;
+            }
         } else if (isIncompatible) {
             actionButton = `<button class="btn btn-secondary btn-install" disabled title="${t('plugins.market.versionIncompatible', { version: plugin.minSystemVersion })}"><i class="fas fa-exclamation-triangle"></i> ${t('plugins.market.incompatible') || '版本不兼容'}</button>`;
         } else if (plugin.isPaid) {
             actionButton = `<button class="btn btn-primary btn-install" style="background: var(--warning-color); border-color: var(--warning-color)" onclick="window.showPayment('${plugin.id}')"><i class="fas fa-shopping-cart"></i> ${t('plugins.market.buy') || '购买并安装'}</button>`;
         } else {
-            actionButton = `<button class="btn btn-primary btn-install" onclick="window.installPlugin('${plugin.id}')"><i class="fas fa-download"></i> 安装</button>`;
+            actionButton = `<button class="btn btn-primary btn-install" onclick="window.installPlugin('${plugin.id}')"><i class="fas fa-download"></i> ${t('plugins.market.install')}</button>`;
         }
 
         const minVersionTag = plugin.minSystemVersion ? 
@@ -276,7 +286,7 @@ function renderMarketList() {
                         <span class="plugin-version">v${plugin.version}</span>
                         ${minVersionTag}
                     </div>
-                    ${plugin.isPaid ? `<span class="plugin-badge" style="background: var(--warning-bg); color: var(--warning-text); margin-top: 5px">${plugin.price || '付费'}</span>` : ''}
+                    ${plugin.isPaid ? `<span class="plugin-badge" style="background: var(--warning-bg); color: var(--warning-text); margin-top: 5px">${plugin.price || t('plugins.market.paid')}</span>` : ''}
                 </div>
             </div>
             <div class="plugin-description">${plugin.description || t('plugins.noDescription')}</div>
@@ -297,10 +307,22 @@ export function showPayment(pluginId) {
 
     currentPayingPlugin = plugin;
     
-    document.getElementById('paymentTitle').textContent = `购买插件: ${plugin.name}`;
-    document.getElementById('paymentPrice').textContent = plugin.price || '付费插件';
+    document.getElementById('paymentTitle').textContent = t('plugins.payment.titleWithName', { name: plugin.name });
+    document.getElementById('paymentPrice').textContent = plugin.price || t('plugins.payment.paidPlugin');
     document.getElementById('paymentDesc').textContent = plugin.description;
-    document.getElementById('paymentQR').src = plugin.qrCode || '';
+    
+    const paymentQREl = document.getElementById('paymentQR');
+    const paymentQRHintEl = document.getElementById('paymentQRHint');
+    if (plugin.qrCode) {
+        paymentQREl.src = plugin.qrCode;
+        paymentQREl.style.display = 'block';
+        if (paymentQRHintEl) paymentQRHintEl.style.display = 'block';
+    } else {
+        paymentQREl.src = '';
+        paymentQREl.style.display = 'none';
+        if (paymentQRHintEl) paymentQRHintEl.style.display = 'none';
+    }
+    
     document.getElementById('paymentLink').href = plugin.paymentUrl || '#';
     
     document.getElementById('paymentModal').classList.add('show');
@@ -319,7 +341,7 @@ export async function installPlugin(pluginId) {
     card.style.position = 'relative';
     const overlay = document.createElement('div');
     overlay.className = 'installing-overlay';
-    overlay.innerHTML = `<i class="fas fa-spinner fa-spin" style="font-size: 2rem"></i><span>正在安装...</span>`;
+    overlay.innerHTML = `<i class="fas fa-spinner fa-spin" style="font-size: 2rem"></i><span>${t('plugins.installing')}</span>`;
     card.appendChild(overlay);
 
     try {
@@ -329,13 +351,13 @@ export async function installPlugin(pluginId) {
         });
         
         if (response.success) {
-            showToast(t('common.success'), `插件 ${plugin.name} 安装成功`, 'success');
+            showToast(t('common.success'), t('plugins.install.success', { name: plugin.name }), 'success');
             await loadPlugins();
             renderMarketList();
         }
     } catch (error) {
         console.error('Failed to install plugin:', error);
-        showToast(t('common.error'), '安装失败: ' + error.message, 'error');
+        showToast(t('common.error'), t('plugins.install.failed', { error: error.message }), 'error');
         overlay.remove();
     }
 }
@@ -368,7 +390,7 @@ async function uploadAndInstallPlugin(file) {
             await loadPlugins();
             renderMarketList();
         } else {
-            throw new Error(result.error?.message || '安装失败');
+            throw new Error(result.error?.message || t('plugins.install.failed', { error: '' }));
         }
     } catch (error) {
         console.error('Upload failed:', error);
@@ -387,10 +409,50 @@ export async function togglePlugin(pluginName, enabled) {
         });
         showToast(t('common.success'), t('plugins.toggle.success', { name: pluginName, status: enabled ? t('common.enabled') : t('common.disabled') }), 'success');
         loadPlugins();
+        if (typeof renderMarketList === 'function') {
+            renderMarketList();
+        } else {
+            loadMarketPlugins();
+        }
         showToast(t('common.info'), t('plugins.restart.required'), 'info');
     } catch (error) {
         console.error(`Failed to toggle plugin ${pluginName}:`, error);
         showToast(t('common.error'), t('plugins.toggle.failed'), 'error');
         loadPlugins();
+        if (typeof renderMarketList === 'function') {
+            renderMarketList();
+        } else {
+            loadMarketPlugins();
+        }
+    }
+}
+
+/**
+ * 卸载插件
+ */
+export async function uninstallPlugin(pluginName) {
+    const confirmed = confirm(t('plugins.uninstall.confirm', { name: pluginName }));
+    if (!confirmed) return;
+
+    try {
+        const response = await apiRequest(`/api/plugins/${encodeURIComponent(pluginName)}`, {
+            method: 'DELETE'
+        });
+
+        if (response && response.success) {
+            showToast(t('common.success'), t('plugins.uninstall.success', { name: pluginName }), 'success');
+            await loadPlugins();
+            if (typeof renderMarketList === 'function') {
+                renderMarketList();
+            } else {
+                loadMarketPlugins();
+            }
+            showToast(t('common.info'), t('plugins.uninstall.restart'), 'info');
+        } else {
+            throw new Error(response?.error?.message || t('plugins.uninstall.failed', { error: '' }));
+        }
+    } catch (error) {
+        console.error(`Failed to uninstall plugin ${pluginName}:`, error);
+        showToast(t('common.error'), t('plugins.uninstall.failed', { error: error.message }), 'error');
     }
 }
