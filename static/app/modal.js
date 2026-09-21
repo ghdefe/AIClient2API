@@ -137,15 +137,11 @@ function collectDraftProviderConfig(providerDetail, providerType, uuid) {
         if (key === 'concurrencyLimit' || key === 'queueLimit') {
             value = parseInt(value || '0', 10);
         } else if (key === 'priority') {
-            // priority 可选：留空则不设置该字段（视为最低优先级）
+            // priority 可选：留空或非法值提交 null，后端视为最低优先级
+            // 必须提交而不是跳过，否则清空输入框无法覆盖节点上已存在的旧值
             const trimmed = (value || '').trim();
-            if (trimmed === '') {
-                return;
-            }
-            value = parseInt(trimmed, 10);
-            if (Number.isNaN(value)) {
-                return;
-            }
+            const parsed = trimmed === '' ? NaN : parseInt(trimmed, 10);
+            value = Number.isNaN(parsed) ? null : parsed;
         }
         providerConfig[key] = value;
     });
@@ -1837,22 +1833,17 @@ async function addProvider(providerType) {
     const concurrencyLimit = parseInt(document.getElementById('newConcurrencyLimit')?.value || '0');
     const queueLimit = parseInt(document.getElementById('newQueueLimit')?.value || '0');
     const priorityRaw = (document.getElementById('newPriority')?.value || '').trim();
+    const priorityParsed = priorityRaw === '' ? NaN : parseInt(priorityRaw, 10);
 
     const providerConfig = {
         customName: customName || '', // 允许为空
         checkModelName: checkModelName || '', // 允许为空
         checkHealth,
         concurrencyLimit,
-        queueLimit
+        queueLimit,
+        // priority 留空或非法时为 null，后端视为最低优先级
+        priority: Number.isNaN(priorityParsed) ? null : priorityParsed
     };
-
-    // priority 留空则不写入字段（视为最低优先级）
-    if (priorityRaw !== '') {
-        const priorityVal = parseInt(priorityRaw, 10);
-        if (!Number.isNaN(priorityVal)) {
-            providerConfig.priority = priorityVal;
-        }
-    }
     
     // 根据提供商类型动态收集配置字段（自动匹配 utils.js 中的定义）
     const allFields = getProviderTypeFields(providerType);

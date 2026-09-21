@@ -1714,7 +1714,11 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
     }
     
     // 2.1. 多候选模型路由：从 customModels + 直接支持中，按节点优先级选出最优路径
-    const allCustomConfigs = getAllCustomModelConfigs(model, CONFIG.MODEL_PROVIDER);
+    // providerExplicit 标记 MODEL_PROVIDER 是否来自用户显式指定（请求头 / 路径首段），
+    // 而不是 config.json 里的默认值。未显式指定时，所有同名自定义模型都参与优先级竞争。
+    const allCustomConfigs = getAllCustomModelConfigs(model, CONFIG.MODEL_PROVIDER, {
+        providerExplicit: CONFIG.PROVIDER_EXPLICIT === true
+    });
     let selectedRouting = null;
     let selectedCustomConfig = null;
     let routeResolved = false;
@@ -1726,8 +1730,14 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
             const routing = resolveCustomModelRouting(model, CONFIG.MODEL_PROVIDER, cfg);
             const targetProvider = routing.actualProvider;
             const targetModel = routing.actualModel;
-            const priority = providerPoolManager.getBestPriorityForModel(targetProvider, targetModel);
 
+            // 解析不出具体提供商（provider / actualProvider 都缺失，且当前又是 AUTO）时无法定位节点
+            if (!targetProvider || targetProvider === MODEL_PROVIDER.AUTO) {
+                logger.warn(`[Custom Model] Candidate '${cfg.id || cfg.alias}' skipped: cannot resolve target provider. Please set 'provider' or 'actualProvider' in custom model config.`);
+                continue;
+            }
+
+            const priority = providerPoolManager.getBestPriorityForModel(targetProvider, targetModel);
             if (priority === null) {
                 logger.info(`[Custom Model] Candidate '${cfg.id || cfg.alias}' -> ${targetProvider}:${targetModel} skipped (no healthy provider)`);
                 continue;
@@ -1742,6 +1752,7 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         }
 
         // 按 priority 升序排序（数值越小优先级越高）
+        // priority 始终为有限值，比较结果不会出现 NaN
         if (candidates.length > 0) {
             candidates.sort((a, b) => a.priority - b.priority);
             const best = candidates[0];
@@ -1766,10 +1777,14 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
         }
     }
 
-    // 非号池模式保持原有行为：取第一个 customModel
-    if (!providerPoolManager && allCustomConfigs.length > 0) {
+    // 仍未解析出路由时（非号池模式，或号池内暂无健康节点），退回第一个 customModel。
+    // 这样 alias -> actualModel 的映射和自定义参数不会丢失，节点可用性问题交由下游选择/fallback 阶段报错。
+    if (!routeResolved && allCustomConfigs.length > 0) {
         selectedCustomConfig = allCustomConfigs[0];
         selectedRouting = resolveCustomModelRouting(model, CONFIG.MODEL_PROVIDER, selectedCustomConfig);
+        if (providerPoolManager) {
+            logger.warn(`[Custom Model] No healthy node for any candidate of '${model}'. Falling back to first custom model config '${selectedCustomConfig.id || selectedCustomConfig.alias}' and deferring to downstream selection.`);
+        }
     }
 
     // 应用选中的路由
